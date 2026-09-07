@@ -19,7 +19,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 64-bit MSBuild, as the release pipeline's VSBuild task uses
+      # (msbuildArchitecture: x64). With the 32-bit one the librarian's host
+      # defaults /MACHINE to X86 and the static libs fail with LNK1112.
       - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
 
       # The release pipeline's steps, translated from Azure Pipelines. The NuGet
       # feed is the project's public one; anonymous restore is what a clone gets.
