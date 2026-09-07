@@ -5526,51 +5526,21 @@ namespace winrt::TerminalApp::implementation
                 }
 
                 const auto isElementInMenu = [&]() {
-                    const auto containsCommand = [&](const auto& target) {
-                        const auto checkCommands = [&](const auto& commands, const auto& self) -> bool {
-                            for (const auto& command : commands)
-                            {
-                                if (command == target)
-                                {
-                                    return true;
-                                }
-                                if (const auto btn = command.template try_as<AppBarButton>())
-                                {
-                                    for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
-                                    {
-                                        if (const auto childFlyout = child.template try_as<MUX::Controls::CommandBarFlyout>())
-                                        {
-                                            if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
-                                            {
-                                                return true;
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            return false;
-                        };
-
-                        return checkCommands(menu.PrimaryCommands(), checkCommands) ||
-                               checkCommands(menu.SecondaryCommands(), checkCommands);
-                    };
-
                     const auto focusedDo = focused.try_as<WUX::DependencyObject>();
                     if (!focusedDo)
                     {
                         return false;
                     }
 
-                    // Check if focused element or any visual ancestor is in the submenu commands or child flyouts.
+                    // Check if focused element or any visual ancestor is a command bar element.
                     // Bounded to CommandBar or Popup to avoid walking up the entire visual tree on external focus.
+                    WUX::Controls::ICommandBarElement matchedCommand{ nullptr };
                     for (auto cur = focusedDo; cur; cur = WUX::Media::VisualTreeHelper::GetParent(cur))
                     {
-                        if (cur.try_as<WUX::Controls::ICommandBarElement>())
+                        if (auto cmd = cur.try_as<WUX::Controls::ICommandBarElement>())
                         {
-                            if (containsCommand(cur))
-                            {
-                                return true;
-                            }
+                            matchedCommand = cmd;
+                            break;
                         }
                         if (cur.try_as<WUX::Controls::CommandBar>() || cur.try_as<WUX::Controls::Primitives::Popup>())
                         {
@@ -5578,12 +5548,12 @@ namespace winrt::TerminalApp::implementation
                         }
                     }
 
-                    // Check if focused element is the internal MoreButton of this submenu or a child flyout
+                    // Check if focused element is the internal MoreButton ("...") of a command bar.
+                    WUX::Controls::CommandBar focusedBar{ nullptr };
                     if (const auto fe = focused.try_as<WUX::FrameworkElement>())
                     {
                         if (fe.Name() == MoreButtonPartName)
                         {
-                            WUX::Controls::CommandBar focusedBar{ nullptr };
                             for (auto p = WUX::Media::VisualTreeHelper::GetParent(focusedDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
                             {
                                 if (auto cb = p.try_as<WUX::Controls::CommandBar>())
@@ -5592,11 +5562,27 @@ namespace winrt::TerminalApp::implementation
                                     break;
                                 }
                             }
+                        }
+                    }
 
-                            if (focusedBar)
+                    if (!matchedCommand && !focusedBar)
+                    {
+                        return false;
+                    }
+
+                    // Verify whether matchedCommand or focusedBar belongs to this flyout (or a child flyout).
+                    const auto checkMenu = [&](const auto& currentMenu, const auto& self) -> bool {
+                        for (const auto& commands : { currentMenu.PrimaryCommands(), currentMenu.SecondaryCommands() })
+                        {
+                            if (commands)
                             {
-                                const auto checkBar = [&](const auto& commands, const auto& self) -> bool {
-                                    for (const auto& element : commands)
+                                for (const auto& element : commands)
+                                {
+                                    if (matchedCommand && element == matchedCommand)
+                                    {
+                                        return true;
+                                    }
+                                    if (focusedBar)
                                     {
                                         if (const auto cmdDo = element.try_as<WUX::DependencyObject>())
                                         {
@@ -5612,32 +5598,27 @@ namespace winrt::TerminalApp::implementation
                                                 }
                                             }
                                         }
-                                        if (const auto btn = element.template try_as<AppBarButton>())
+                                    }
+                                    if (const auto btn = element.template try_as<AppBarButton>())
+                                    {
+                                        for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
                                         {
-                                            for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
+                                            if (const auto childFlyout = child.template try_as<MUX::Controls::CommandBarFlyout>())
                                             {
-                                                if (const auto childFlyout = child.template try_as<MUX::Controls::CommandBarFlyout>())
+                                                if (self(childFlyout, self))
                                                 {
-                                                    if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
-                                                    {
-                                                        return true;
-                                                    }
+                                                    return true;
                                                 }
                                             }
                                         }
                                     }
-                                    return false;
-                                };
-
-                                if (checkBar(menu.PrimaryCommands(), checkBar) || checkBar(menu.SecondaryCommands(), checkBar))
-                                {
-                                    return true;
                                 }
                             }
                         }
-                    }
+                        return false;
+                    };
 
-                    return false;
+                    return checkMenu(menu, checkMenu);
                 };
 
                 if (isElementInMenu())

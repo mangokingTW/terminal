@@ -3957,51 +3957,21 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
 
         const auto isElementInMenu = [&]() {
-            const auto containsCommand = [&](const auto& target) {
-                const auto checkCommands = [&](const auto& commands, const auto& self) -> bool {
-                    for (const auto& element : commands)
-                    {
-                        if (element == target)
-                        {
-                            return true;
-                        }
-                        if (const auto btn = element.try_as<Controls::AppBarButton>())
-                        {
-                            for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
-                            {
-                                if (const auto childFlyout = child.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
-                                {
-                                    if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
-                                    {
-                                        return true;
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    return false;
-                };
-
-                return checkCommands(menu.PrimaryCommands(), checkCommands) ||
-                       checkCommands(menu.SecondaryCommands(), checkCommands);
-            };
-
             const auto focusedDo = focused.try_as<DependencyObject>();
             if (!focusedDo)
             {
                 return false;
             }
 
-            // Check if focused element or any visual ancestor is in the menu commands or child flyouts.
+            // Check if focused element or any visual ancestor is a command bar element.
             // Bounded to CommandBar or Popup to avoid walking up the entire visual tree on external focus.
+            Controls::ICommandBarElement matchedCommand{ nullptr };
             for (auto cur = focusedDo; cur; cur = Media::VisualTreeHelper::GetParent(cur))
             {
-                if (cur.try_as<Controls::ICommandBarElement>())
+                if (auto cmd = cur.try_as<Controls::ICommandBarElement>())
                 {
-                    if (containsCommand(cur))
-                    {
-                        return true;
-                    }
+                    matchedCommand = cmd;
+                    break;
                 }
                 if (cur.try_as<Controls::CommandBar>() || cur.try_as<Controls::Primitives::Popup>())
                 {
@@ -4009,15 +3979,12 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 }
             }
 
-            // Check if focused element is the internal MoreButton ("...") of this flyout or a child flyout
+            // Check if focused element is the internal MoreButton ("...") of a command bar.
+            Controls::CommandBar focusedBar{ nullptr };
             if (const auto fe = focused.try_as<FrameworkElement>())
             {
                 if (fe.Name() == MoreButtonPartName)
                 {
-                    // Find the immediate containing CommandBar ancestor of the focused MoreButton.
-                    // Restricting traversal to the CommandBar boundary prevents false-positive focus
-                    // stealing from MoreButtons in other panes or UI controls.
-                    Controls::CommandBar focusedBar{ nullptr };
                     for (auto p = Media::VisualTreeHelper::GetParent(focusedDo); p; p = Media::VisualTreeHelper::GetParent(p))
                     {
                         if (auto cb = p.try_as<Controls::CommandBar>())
@@ -4026,11 +3993,27 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                             break;
                         }
                     }
+                }
+            }
 
-                    if (focusedBar)
+            if (!matchedCommand && !focusedBar)
+            {
+                return false;
+            }
+
+            // Verify whether matchedCommand or focusedBar belongs to this flyout (or a child flyout).
+            const auto checkMenu = [&](const auto& currentMenu, const auto& self) -> bool {
+                for (const auto& commands : { currentMenu.PrimaryCommands(), currentMenu.SecondaryCommands() })
+                {
+                    if (commands)
                     {
-                        const auto checkBar = [&](const auto& commands, const auto& self) -> bool {
-                            for (const auto& element : commands)
+                        for (const auto& element : commands)
+                        {
+                            if (matchedCommand && element == matchedCommand)
+                            {
+                                return true;
+                            }
+                            if (focusedBar)
                             {
                                 if (const auto cmdDo = element.try_as<DependencyObject>())
                                 {
@@ -4046,32 +4029,27 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                         }
                                     }
                                 }
-                                if (const auto btn = element.try_as<Controls::AppBarButton>())
+                            }
+                            if (const auto btn = element.try_as<Controls::AppBarButton>())
+                            {
+                                for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
                                 {
-                                    for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
+                                    if (const auto childFlyout = child.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
                                     {
-                                        if (const auto childFlyout = child.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                                        if (self(childFlyout, self))
                                         {
-                                            if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
-                                            {
-                                                return true;
-                                            }
+                                            return true;
                                         }
                                     }
                                 }
                             }
-                            return false;
-                        };
-
-                        if (checkBar(menu.PrimaryCommands(), checkBar) || checkBar(menu.SecondaryCommands(), checkBar))
-                        {
-                            return true;
                         }
                     }
                 }
-            }
+                return false;
+            };
 
-            return false;
+            return checkMenu(menu, checkMenu);
         };
 
         if (isElementInMenu())
