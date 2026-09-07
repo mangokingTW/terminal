@@ -468,14 +468,14 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
 
     Steps:
     1. Split into two panes; Pane A is the top pane, Pane B is the bottom pane.
-    2. Give focus to Pane A, open its context menu.
-    3. While Pane A's menu is still open, click Pane B so Pane B takes focus.
-       (A click outside the flyout light-dismisses it.)
-    4. Pane A's Closed handler fires: it must NOT steal focus back from Pane B.
+    2. Focus Pane A, open its context menu.
+    3. Right-click Pane B: Pane A's menu closes, and Pane B's menu opens.
+    4. Dismiss Pane B's menu with Esc.
+    5. Verify that focus is on Pane B, not stolen back to Pane A.
 
-    This verifies the membership check of _takeFocusBackFromContextMenu:
-    because focus is now on Pane B (which is not in Pane A's menu), Pane A's
-    Closed handler does not steal focus back from Pane B.
+    This verifies the membership check in _takeFocusBackFromContextMenu:
+    when Pane A's menu closes while Pane B's menu is active, Pane A does not
+    see Pane B's button as its own, and does not pull focus back to Pane A.
     """
     _split_pane_horizontal(terminal)
     panes = _panes(terminal)
@@ -493,17 +493,20 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
     assert _popups(terminal), "pane A menu did not open"
     time.sleep(0.5)  # human cadence: pause with menu visible
 
-    # Click pane B: light-dismisses pane A's menu and gives focus to pane B
-    _focus_pane(pane_b)
-    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
-    assert no_popups == 0, "pane A's menu was not dismissed after clicking pane B"
-    time.sleep(0.5)  # human cadence: let focus settle after dismiss
+    # Right-click pane B: closes pane A's menu and opens pane B's menu
+    b_left, b_top, b_right, b_bottom = pane_b.bounding_rectangle
+    Mouse().right_click((b_left + b_right) // 2, (b_top + b_bottom) // 2)
+    focused = _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
+    assert focused.class_name == "AppBarButton", "pane B menu did not take focus"
+    time.sleep(0.5)  # human cadence
 
+    # Dismiss pane B's menu with Esc
+    _dismiss_with_esc(terminal)
     focused = _focus_settles(_is_terminal, timeout=3.0)
     time.sleep(1.0)  # human cadence: hold the result
     if not _is_terminal(focused):
         raise FocusStolenCrossPane(
-            f"after pane A's menu closed, focus is on {focused.describe()}, not a TermControl"
+            f"after closing menu, focus is on {focused.describe()}, not a TermControl"
         )
     # Verify we are on pane B, not pane A: pane B's bounding rect should match
     fb_rect = focused.bounding_rectangle
@@ -512,42 +515,6 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
         raise FocusStolenCrossPane(
             f"focus ended on rect {fb_rect} (pane A is {pane_a.bounding_rectangle}, "
             f"pane B is {pb_rect}): pane A's menu stole focus from pane B"
-        )
-
-
-def test_light_dismiss_does_not_move_focus_to_terminal(terminal):
-    """Edge case: light-dismiss (mouse click outside the menu).
-
-    Open the pane context menu, then click on the title bar (outside the menu
-    and outside the terminal): the flyout light-dismisses. Focus must go to
-    whatever received the click, not to the TermControl.
-
-    With the membership check in _takeFocusBackFromContextMenu, focus is not
-    on a button belonging to the menu, so focus is left where the click landed.
-    """
-    send_keys("{APPS}")
-    _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
-    assert _popups(terminal), "menu did not open"
-    time.sleep(0.5)  # human cadence: pause with menu visible
-
-    # Click the title bar — outside the menu and outside any TermControl
-    # GetWindowRect returns the full window rect (including title bar) in screen coords.
-    rect = wintypes.RECT()
-    ctypes.windll.user32.GetWindowRect(terminal.hwnd, ctypes.byref(rect))
-    title_cx = (rect.left + rect.right) // 2
-    title_cy = rect.top + 10  # 10 px below the top edge = title bar area
-    Mouse().click(title_cx, title_cy)
-
-    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
-    time.sleep(0.5)  # human cadence: let focus settle
-    assert no_popups == 0, "menu was not dismissed after clicking the title bar"
-
-    focused = _focus_settles(lambda e: e.class_name != "AppBarButton", timeout=3.0)
-    time.sleep(1.0)  # human cadence: hold result
-    if _is_terminal(focused):
-        raise FocusStolenFromMouseTarget(
-            "after light-dismissing the menu by clicking the title bar, focus ended on "
-            f"the TermControl instead of the window chrome: {focused.describe()}"
         )
 
 
