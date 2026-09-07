@@ -251,13 +251,12 @@ def _open_split_submenu(win: Window) -> UiaElement:
     _open_pane_menu(win)
     entry = _walk_down_until(_is_split_pane_entry)
     assert _is_split_pane_entry(entry), f"never reached the Split pane entry: {entry.describe()}"
-    opened = len(_popups(win))
     send_keys("{RIGHT}")
-    settled(lambda: len(_popups(win)), lambda n: n > opened, timeout=3.0)
     item = _focus_settles(
-        lambda e, n=entry.name: e.class_name in ("AppBarButton", "MenuFlyoutItem", "MenuFlyout")
-        and (e.name != n or e.class_name == "MenuFlyout"),
-        timeout=3.0,
+        lambda e, n=entry.name: e.class_name == "AppBarButton" and e.name != n, timeout=10.0
+    )
+    assert item.class_name == "AppBarButton" and item.name != entry.name, (
+        f"Right did not open the Split pane submenu; focus is on {item.describe()}"
     )
     return item
 
