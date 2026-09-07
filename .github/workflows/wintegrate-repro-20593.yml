@@ -1,0 +1,109 @@
+# Runs the automated reproduction of issue #20593 against a released build.
+#
+# The run is **green when the issue still reproduces**: the three reproduction
+# tests are `xfail(strict=True, raises=...)`, so an XPASS — focus handed back to
+# the terminal after Esc — turns the run red instead. A failing control also
+# turns it red, which means the measurement is not trustworthy rather than that
+# the issue is fixed.
+name: Reproduce issue 20593
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [wintegrate-repro-issue-20593]
+
+permissions:
+  contents: read
+
+env:
+  TERMINAL_VERSION: 1.24.11911.0
+  # What WindowsTerminal.exe inside that package reports; not the package version.
+  TERMINAL_FILE_VERSION: 1.24.2607.10001
+
+jobs:
+  reproduce:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            os: windows-latest
+            sha256: 7691EFEB71C8DD0B95536C84E366FA4CF809A42C534912F9CEFA1056534383BD
+          - arch: arm64
+            os: windows-11-arm
+            sha256: D794A881D4B4E151D79366FAC85D1CBE7E21E90FA69F4157796377C13F1EA844
+    name: "#20593 on ${{ matrix.arch }}"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Quiets what steals the foreground on the runner images, installs
+      # wintegrate, and starts the on-screen key/pointer visualiser so the
+      # recording shows which inputs were sent.
+      - uses: mangokingTW/wintegrate/.github/actions/setup-windows-gui-test@main
+        with:
+          wintegrate-version: ">=0.6.2"
+
+      # Portable rather than installed: windows-latest ships no Terminal and
+      # windows-11-arm ships a Store package that cannot be pinned. The zip is
+      # unsigned, so its hash is checked here and the signature on the exe it
+      # contains. Straight from the project's own release, so the provenance
+      # needs no mirror.
+      - name: Extract Windows Terminal ${{ env.TERMINAL_VERSION }} (portable)
+        timeout-minutes: 10
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA256: ${{ matrix.sha256 }}
+          # The whole subject, not a substring: a substring match accepts a
+          # different certificate that merely contains the same CN.
+          EXPECTED_SIGNER: "CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US"
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $asset = "Microsoft.WindowsTerminal_$($env:TERMINAL_VERSION)_${{ matrix.arch }}.zip"
+          $dir = Join-Path $env:RUNNER_TEMP 'wt'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+
+          gh release download "v$env:TERMINAL_VERSION" --repo microsoft/terminal `
+            --pattern $asset --dir $dir
+          if ($LASTEXITCODE -ne 0) { throw "gh release download failed ($LASTEXITCODE)" }
+
+          $zip = Join-Path $dir $asset
+          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash
+          if ($hash -ne $env:EXPECTED_SHA256) {
+            throw "SHA-256 mismatch: got $hash, expected $env:EXPECTED_SHA256"
+          }
+          Write-Host "sha256 ok: $asset"
+
+          Expand-Archive -LiteralPath $zip -DestinationPath $dir -Force
+          $home_ = Join-Path $dir "terminal-$env:TERMINAL_VERSION"
+          $exe = Join-Path $home_ 'WindowsTerminal.exe'
+          if (-not (Test-Path $exe)) { throw "no WindowsTerminal.exe in $home_" }
+          New-Item -ItemType File -Force -Path (Join-Path $home_ '.portable') | Out-Null
+
+          $sig = Get-AuthenticodeSignature $exe
+          if ($sig.Status -ne 'Valid') { throw "signature is $($sig.Status), not Valid" }
+          if ($sig.SignerCertificate.Subject -ne $env:EXPECTED_SIGNER) {
+            throw "unexpected signer: $($sig.SignerCertificate.Subject)"
+          }
+          $got = (Get-Item $exe).VersionInfo.FileVersion
+          if ($got -ne $env:TERMINAL_FILE_VERSION) { throw "$exe is $got, expected $env:TERMINAL_FILE_VERSION" }
+          Write-Host "signature and file version ok: $home_ ($got)"
+          "WT_PORTABLE_DIR=$home_" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # The recording is not the evidence — the assertions are — but it answers
+      # the question a table of strings cannot: does this look like the bug that
+      # was reported? Kept whatever the outcome.
+      - name: Reproduce
+        env:
+          WINTEGRATE_RECORD: "1"
+        run: pytest src/cascadia/TerminalApp/ui-repro -v -rxX -s
+
+      - name: Upload the recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reproduction-20593-${{ matrix.arch }}
+          path: recording-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
