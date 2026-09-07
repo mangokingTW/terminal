@@ -164,10 +164,12 @@ def _walk_down_until(matches, steps: int = 14) -> UiaElement:
     focused = _focused()
     for _ in range(steps):
         if matches(focused):
+            time.sleep(0.5)  # human cadence: pause when target entry is reached
             return focused
         before = focused.name
         send_keys("{DOWN}")
         focused = _focus_settles(lambda e, b=before: e.name != b, timeout=2.0)
+        time.sleep(0.3)  # human cadence: pacing between Down keystrokes
     return focused
 
 
@@ -243,6 +245,7 @@ def _open_pane_menu(win: Window) -> UiaElement:
         f"the pane context menu did not take focus; focus is on {focused.describe()}"
     )
     assert _popups(win), "the Menu key opened no popup window"
+    time.sleep(0.5)  # human cadence: pause after menu opens and takes focus
     return focused
 
 
@@ -258,12 +261,15 @@ def _open_split_submenu(win: Window) -> UiaElement:
     assert item.class_name == "AppBarButton" and item.name != entry.name, (
         f"Right did not open the Split pane submenu; focus is on {item.describe()}"
     )
+    time.sleep(0.6)  # human cadence: pause after submenu opens and takes focus
     return item
 
 
 def _press_esc_and_wait_for_the_flyout(win: Window, opened: int) -> int:
     send_keys("{ESC}")
-    return settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=5.0)
+    left = settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=5.0)
+    time.sleep(0.5)  # human cadence: pause after flyout dismiss is verified
+    return left
 
 
 def _dismiss_with_esc(win: Window, presses: int = 3) -> int:
@@ -283,9 +289,11 @@ def test_the_measurement_can_see_a_split(terminal):
     see panes at all, and the reproduction would be about the probe, not the bug.
     """
     _open_split_submenu(terminal)
+    time.sleep(0.6)  # human cadence: pause to see submenu before Enter
     send_keys("{ENTER}")
     panes = settled(lambda: len(_panes(terminal)), lambda n: n == 2, timeout=10.0)
     assert panes == 2, f"Enter on 'Duplicate ...' produced {panes} pane(s), expected a split"
+    time.sleep(1.0)  # human cadence: pause to see the split result
 
 
 @reproduces(FocusStayedOnDismissedItem)
@@ -302,6 +310,7 @@ def test_esc_from_the_submenu_hands_focus_back_to_the_terminal(terminal):
             f"after Esc, focus is on {focused.describe()} rect={focused.bounding_rectangle} "
             f"(the item that had it was {item.name!r}); nothing on screen has it"
         )
+    time.sleep(0.8)  # human cadence: pause after focus returned to parent button
     left = _dismiss_with_esc(terminal)
     focused = _focus_settles(_is_terminal, timeout=3.0)
     if left or not _is_terminal(focused):
@@ -309,6 +318,7 @@ def test_esc_from_the_submenu_hands_focus_back_to_the_terminal(terminal):
             f"after closing the menu with Esc, {left} popup(s) remain and focus is on "
             f"{focused.describe()}, not on the terminal"
         )
+    time.sleep(1.0)  # human cadence: pause after focus returned to terminal
 
 
 @reproduces((FocusStayedOnDismissedItem, DismissedItemWasInvoked))
@@ -323,11 +333,13 @@ def test_enter_after_esc_reaches_the_shell_not_the_dismissed_item(terminal):
             f"{left} popup(s) still open after three Esc presses: the keys went to the "
             "dismissed submenu item"
         )
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(0.8)  # human cadence: pause to show menu closed and terminal focused
     send_keys("{ENTER}")
     # Waits for a split to finish rather than for the count to move: the tree reads
     # 0 panes for a moment while a new one is being built.
     panes = settled(lambda: len(_panes(terminal)), lambda n: n == 2, timeout=5.0)
-    time.sleep(1.0)  # hold the result for the recording
+    time.sleep(1.5)  # hold the result for the recording
     if panes != 1 or _popups(terminal):
         raise DismissedItemWasInvoked(
             f"Enter after Esc left {panes} panes and {len(_popups(terminal))} popup(s): the "
@@ -343,13 +355,15 @@ def test_esc_from_the_top_level_hands_focus_back_to_the_terminal(terminal):
     _open_pane_menu(terminal)
     entry = _walk_down_until(_is_split_pane_entry)
     assert _is_split_pane_entry(entry), f"never reached the Split pane entry: {entry.describe()}"
+    time.sleep(0.8)  # human cadence: show Split pane highlighted
     opened = len(_popups(terminal))
     left = _press_esc_and_wait_for_the_flyout(terminal, opened)
     assert not left, "Esc at the top level did not close the menu"
     focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(0.8)  # human cadence: show menu closed and focus on terminal
     send_keys("{ENTER}")
     reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
-    time.sleep(1.0)  # hold the result for the recording
+    time.sleep(1.5)  # hold the result for the recording so human sees shell prompt
     if not _is_terminal(focused) or reopened > 0:
         raise FocusStayedOnDismissedItem(
             f"after Esc, focus is on {focused.describe()} rect={focused.bounding_rectangle}; "
@@ -369,17 +383,20 @@ def test_the_tab_menu_hands_focus_back_on_esc(terminal):
     assert focused.class_name.startswith("MenuFlyout"), (
         f"the tab context menu did not take focus; focus is on {focused.describe()}"
     )
+    time.sleep(0.5)  # human cadence: pause after tab menu takes focus
     entry = _walk_down_until(_is_tab_submenu_entry)
     assert _is_tab_submenu_entry(entry), f"never reached a tab submenu entry: {entry.describe()}"
     send_keys("{RIGHT}")
     _focus_settles(lambda e, n=entry.name: e.name != n, timeout=2.0)
+    time.sleep(0.6)  # human cadence: pause to show tab submenu
     for _ in range(2):  # one Esc per open level: the submenu, then the menu
         opened = len(_popups(terminal))
         _press_esc_and_wait_for_the_flyout(terminal, opened)
     focused = _focus_settles(_is_terminal, timeout=3.0)
     assert _is_terminal(focused), f"after Esc, focus is on {focused.describe()}, not the terminal"
+    time.sleep(0.8)  # human cadence: pause to show focus returned to terminal
     send_keys("{ENTER}")
-    time.sleep(1.0)
+    time.sleep(1.5)  # human cadence: hold the result
     assert len(_panes(terminal)) == 1, "Enter after Esc split the pane from the tab menu"
     assert not _popups(terminal), "Enter after Esc re-opened a menu"
 
