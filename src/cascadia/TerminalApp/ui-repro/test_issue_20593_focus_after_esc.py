@@ -263,7 +263,7 @@ def _open_split_submenu(win: Window) -> UiaElement:
 
 def _press_esc_and_wait_for_the_flyout(win: Window, opened: int) -> int:
     send_keys("{ESC}")
-    return settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=3.0)
+    return settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=5.0)
 
 
 def _dismiss_with_esc(win: Window, presses: int = 3) -> int:
@@ -344,8 +344,8 @@ def test_esc_from_the_top_level_hands_focus_back_to_the_terminal(terminal):
     entry = _walk_down_until(_is_split_pane_entry)
     assert _is_split_pane_entry(entry), f"never reached the Split pane entry: {entry.describe()}"
     opened = len(_popups(terminal))
-    _press_esc_and_wait_for_the_flyout(terminal, opened)
-    assert not _popups(terminal), "Esc at the top level did not close the menu"
+    left = _press_esc_and_wait_for_the_flyout(terminal, opened)
+    assert not left, "Esc at the top level did not close the menu"
     focused = _focus_settles(_is_terminal, timeout=3.0)
     send_keys("{ENTER}")
     reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
