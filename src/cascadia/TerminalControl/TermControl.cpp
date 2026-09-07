@@ -430,6 +430,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             if (auto control{ weakThis.get() }; control && !control->_IsClosing())
             {
                 const auto& menu{ control->ContextMenu() };
+                control->_takeFocusBackFromContextMenu(menu);
                 menu.PrimaryCommands().Clear();
                 menu.SecondaryCommands().Clear();
                 for (const auto& e : control->_originalPrimaryElements)
@@ -440,13 +441,13 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 {
                     menu.SecondaryCommands().Append(e);
                 }
-                control->_takeFocusBackFromContextMenu();
             }
         });
         SelectionContextMenu().Closed([weakThis = get_weak()](auto&&, auto&&) {
             if (auto control{ weakThis.get() }; control && !control->_IsClosing())
             {
                 const auto& menu{ control->SelectionContextMenu() };
+                control->_takeFocusBackFromContextMenu(menu);
                 menu.PrimaryCommands().Clear();
                 menu.SecondaryCommands().Clear();
                 for (const auto& e : control->_originalSelectedPrimaryElements)
@@ -457,7 +458,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 {
                     menu.SecondaryCommands().Append(e);
                 }
-                control->_takeFocusBackFromContextMenu();
             }
         });
         if constexpr (Feature_QuickFix::IsEnabled())
@@ -3935,14 +3935,13 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
     // Method Description:
     // - GH#20593: when the context menu is dismissed with Esc, keyboard focus
-    //   stays on the AppBarButton that had it, even though the flyout is gone.
-    //   The button is off screen but alive, so Enter would invoke it. Because
-    //   the Closed handler clears SecondaryCommands() before this call, a
-    //   strict membership test is no longer possible; testing for any
-    //   AppBarButton is deliberate and safe since no other AppBarButtons exist
-    //   in the terminal pane. If focus is still on an AppBarButton, nothing else
-    //   took it, so hand it back to the control.
-    void TermControl::_takeFocusBackFromContextMenu()
+    //   stays on the button that had it, even though the flyout is gone.
+    //   The button is off screen but alive, so Enter would invoke it. If the
+    //   flyout closed with focus still on one of its own commands, nothing else
+    //   took focus, so hand it back to the control. We verify membership against
+    //   the closing menu specifically to avoid cross-pane focus stealing in
+    //   multi-pane layouts.
+    void TermControl::_takeFocusBackFromContextMenu(const Controls::CommandBarFlyout& menu)
     {
         const auto root = XamlRoot();
         if (!root)
@@ -3951,9 +3950,26 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
 
         const auto focused = FocusManager::GetFocusedElement(root);
-        if (focused && focused.try_as<Controls::AppBarButton>())
+        if (!focused)
         {
-            Focus(FocusState::Programmatic);
+            return;
+        }
+
+        for (const auto& element : menu.PrimaryCommands())
+        {
+            if (element == focused)
+            {
+                Focus(FocusState::Programmatic);
+                return;
+            }
+        }
+        for (const auto& element : menu.SecondaryCommands())
+        {
+            if (element == focused)
+            {
+                Focus(FocusState::Programmatic);
+                return;
+            }
         }
     }
 

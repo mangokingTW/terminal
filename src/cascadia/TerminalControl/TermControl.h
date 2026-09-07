@@ -433,7 +433,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         void _pasteTextWithBroadcast(const winrt::hstring& text);
 
         void _contextMenuHandler(IInspectable sender, Control::ContextMenuRequestedEventArgs args);
-        void _takeFocusBackFromContextMenu();
+        void _takeFocusBackFromContextMenu(const winrt::Windows::UI::Xaml::Controls::CommandBarFlyout& menu);
         void _showContextMenuAt(const winrt::Windows::Foundation::Point& controlRelativePos);
 
         void _bubbleSearchMissingCommand(const IInspectable& sender, const Control::SearchMissingCommandEventArgs& args);

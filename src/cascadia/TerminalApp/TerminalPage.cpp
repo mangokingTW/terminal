@@ -5510,16 +5510,24 @@ namespace winrt::TerminalApp::implementation
                 {
                     return;
                 }
-                const auto focused{ winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement(root).try_as<AppBarButton>() };
+                const auto focused{ winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement(root) };
                 if (!focused)
                 {
                     return;
                 }
+                for (const auto& command : menu.PrimaryCommands())
+                {
+                    if (command == focused)
+                    {
+                        owner.Focus(FocusState::Keyboard);
+                        return;
+                    }
+                }
                 for (const auto& command : menu.SecondaryCommands())
                 {
-                    if (command.try_as<AppBarButton>() == focused)
+                    if (command == focused)
                     {
-                        owner.Focus(FocusState::Programmatic);
+                        owner.Focus(FocusState::Keyboard);
                         return;
                     }
                 }
