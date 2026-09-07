@@ -692,10 +692,16 @@ def test_submenu_light_dismiss_detached_safe(terminal):
     assert len(_popups(terminal)) >= 2, "expected at least 2 popups for parent and submenu"
     time.sleep(0.5)
 
-    # Click near bottom-right of terminal window outside flyouts to light-dismiss all popups
+    # Click near bottom-right of terminal window outside flyouts to light-dismiss popups.
+    # In XAML, each light-dismiss click dismisses one tier of nested flyouts.
     rect = wintypes.RECT()
     ctypes.windll.user32.GetWindowRect(terminal.hwnd, ctypes.byref(rect))
-    Mouse().click(rect.right - 80, rect.bottom - 80)
+    cx, cy = rect.right - 80, rect.bottom - 80
+    for _ in range(3):
+        if len(_popups(terminal)) == 0:
+            break
+        Mouse().click(cx, cy)
+        time.sleep(0.5)
 
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
     assert no_popups == 0, f"light-dismiss left {no_popups} popup(s) open"
