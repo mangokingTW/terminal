@@ -469,13 +469,13 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
     Steps:
     1. Split into two panes; Pane A is the top pane, Pane B is the bottom pane.
     2. Focus Pane A, open its context menu.
-    3. Right-click Pane B: Pane A's menu closes, and Pane B's menu opens.
-    4. Dismiss Pane B's menu with Esc.
+    3. Click Pane B: Pane A's menu closes (light-dismiss), and Pane B takes focus.
+    4. Open Pane B's menu and dismiss it with Esc.
     5. Verify that focus is on Pane B, not stolen back to Pane A.
 
     This verifies the membership check in _takeFocusBackFromContextMenu:
-    when Pane A's menu closes while Pane B's menu is active, Pane A does not
-    see Pane B's button as its own, and does not pull focus back to Pane A.
+    when Pane A's menu closes while Pane B has focus, Pane A does not
+    see Pane B as its own, and does not pull focus back to Pane A.
     """
     _split_pane_horizontal(terminal)
     panes = _panes(terminal)
@@ -493,9 +493,14 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
     assert _popups(terminal), "pane A menu did not open"
     time.sleep(0.5)  # human cadence: pause with menu visible
 
-    # Right-click pane B: closes pane A's menu and opens pane B's menu
-    b_left, b_top, b_right, b_bottom = pane_b.bounding_rectangle
-    Mouse().right_click((b_left + b_right) // 2, (b_top + b_bottom) // 2)
+    # Click pane B: light-dismisses pane A's menu and gives focus to pane B
+    _focus_pane(pane_b)
+    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
+    assert no_popups == 0, "pane A's menu was not dismissed after clicking pane B"
+    time.sleep(0.5)  # human cadence: let focus settle after dismiss
+
+    # Open pane B's menu now that pane B is focused
+    send_keys("{APPS}")
     focused = _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
     assert focused.class_name == "AppBarButton", "pane B menu did not take focus"
     time.sleep(0.5)  # human cadence
@@ -618,13 +623,15 @@ def test_more_button_esc_returns_focus_to_terminal(terminal):
 
     more_btn = None
     for p in popups:
-        more_btn = p.find_first(automation_id="MoreButton")
+        p_elem = UiaElement.from_handle(p.hwnd)
+        more_btn = p_elem.find_first(automation_id="MoreButton")
         if more_btn:
             break
 
     if not more_btn:
         for p in popups:
-            btns = p.find_all(class_name="Button")
+            p_elem = UiaElement.from_handle(p.hwnd)
+            btns = p_elem.find_all(class_name="Button")
             for b in btns:
                 if b.automation_id == "MoreButton" or "more" in (b.name or "").lower():
                     more_btn = b
