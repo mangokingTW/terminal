@@ -4002,18 +4002,23 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             }
 
             // Verify whether matchedCommand or focusedBar belongs to this flyout (or a child flyout).
-            const auto checkMenu = [&](const auto& currentMenu, const auto& self) -> bool {
+            const auto checkMenu = [&](const auto& currentMenu, const size_t depth, const auto& self) -> bool {
+                if (depth > 8)
+                {
+                    return false;
+                }
                 for (const auto& commands : { currentMenu.PrimaryCommands(), currentMenu.SecondaryCommands() })
                 {
                     if (commands)
                     {
+                        bool checkedBarForThisList = false;
                         for (const auto& element : commands)
                         {
                             if (matchedCommand && element == matchedCommand)
                             {
                                 return true;
                             }
-                            if (focusedBar)
+                            if (focusedBar && !checkedBarForThisList)
                             {
                                 if (const auto cmdDo = element.try_as<DependencyObject>())
                                 {
@@ -4025,6 +4030,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                         }
                                         if (p.try_as<Controls::CommandBar>())
                                         {
+                                            // Sibling items share the same CommandBar ancestor;
+                                            // no need to re-climb from other items in this list.
+                                            checkedBarForThisList = true;
                                             break;
                                         }
                                     }
@@ -4036,7 +4044,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                 {
                                     if (const auto childFlyout = child.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
                                     {
-                                        if (self(childFlyout, self))
+                                        if (self(childFlyout, depth + 1, self))
                                         {
                                             return true;
                                         }
@@ -4049,7 +4057,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 return false;
             };
 
-            return checkMenu(menu, checkMenu);
+            return checkMenu(menu, 0, checkMenu);
         };
 
         if (isElementInMenu())

@@ -5571,18 +5571,23 @@ namespace winrt::TerminalApp::implementation
                     }
 
                     // Verify whether matchedCommand or focusedBar belongs to this flyout (or a child flyout).
-                    const auto checkMenu = [&](const auto& currentMenu, const auto& self) -> bool {
+                    const auto checkMenu = [&](const auto& currentMenu, const size_t depth, const auto& self) -> bool {
+                        if (depth > 8)
+                        {
+                            return false;
+                        }
                         for (const auto& commands : { currentMenu.PrimaryCommands(), currentMenu.SecondaryCommands() })
                         {
                             if (commands)
                             {
+                                bool checkedBarForThisList = false;
                                 for (const auto& element : commands)
                                 {
                                     if (matchedCommand && element == matchedCommand)
                                     {
                                         return true;
                                     }
-                                    if (focusedBar)
+                                    if (focusedBar && !checkedBarForThisList)
                                     {
                                         if (const auto cmdDo = element.try_as<WUX::DependencyObject>())
                                         {
@@ -5594,18 +5599,21 @@ namespace winrt::TerminalApp::implementation
                                                 }
                                                 if (p.try_as<WUX::Controls::CommandBar>())
                                                 {
+                                                    // Sibling items share the same CommandBar ancestor;
+                                                    // no need to re-climb from other items in this list.
+                                                    checkedBarForThisList = true;
                                                     break;
                                                 }
                                             }
                                         }
                                     }
-                                    if (const auto btn = element.template try_as<AppBarButton>())
+                                    if (const auto btn = element.try_as<AppBarButton>())
                                     {
                                         for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
                                         {
-                                            if (const auto childFlyout = child.template try_as<MUX::Controls::CommandBarFlyout>())
+                                            if (const auto childFlyout = child.try_as<MUX::Controls::CommandBarFlyout>())
                                             {
-                                                if (self(childFlyout, self))
+                                                if (self(childFlyout, depth + 1, self))
                                                 {
                                                     return true;
                                                 }
@@ -5618,14 +5626,17 @@ namespace winrt::TerminalApp::implementation
                         return false;
                     };
 
-                    return checkMenu(menu, checkMenu);
+                    return checkMenu(menu, 0, checkMenu);
                 };
 
                 if (isElementInMenu())
                 {
                     if (WUX::Media::VisualTreeHelper::GetParent(owner))
                     {
-                        owner.Focus(FocusState::Keyboard);
+                        if (!owner.Focus(FocusState::Keyboard))
+                        {
+                            owner.Focus(FocusState::Programmatic);
+                        }
                     }
                     // If owner is detached (e.g. during light-dismiss of the entire flyout hierarchy),
                     // do not force focus to the terminal here: the top-level menu's Closed handler in
