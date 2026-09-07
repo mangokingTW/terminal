@@ -3971,10 +3971,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             return false;
         };
 
-        if (checkMembershipAndFocus(menu.PrimaryCommands()) || checkMembershipAndFocus(menu.SecondaryCommands()))
-        {
-            return;
-        }
+        checkMembershipAndFocus(menu.PrimaryCommands()) || checkMembershipAndFocus(menu.SecondaryCommands());
     }
 
     void TermControl::_contextMenuHandler(IInspectable /*sender*/,
