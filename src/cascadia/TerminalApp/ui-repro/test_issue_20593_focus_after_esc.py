@@ -137,6 +137,8 @@ def _is_terminal(element: UiaElement) -> bool:
 
 
 def _panes(win: Window) -> list[UiaElement]:
+    """Only meaningful while no flyout is open: with a popup up, the window's UIA
+    tree reports no TermControl at all."""
     return UiaElement.from_handle(win.hwnd).find_all(class_name="TermControl")
 
 
@@ -259,9 +261,19 @@ def _open_split_submenu(win: Window) -> UiaElement:
     return item
 
 
-def _press_esc_and_wait_for_the_flyout(win: Window, opened: int) -> None:
+def _press_esc_and_wait_for_the_flyout(win: Window, opened: int) -> int:
     send_keys("{ESC}")
-    settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=3.0)
+    return settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=3.0)
+
+
+def _dismiss_with_esc(win: Window, presses: int = 3) -> int:
+    """Esc until no popup is left, at most `presses` times; returns what is left."""
+    left = len(_popups(win))
+    for _ in range(presses):
+        if not left:
+            break
+        left = _press_esc_and_wait_for_the_flyout(win, left)
+    return left
 
 
 def test_the_measurement_can_see_a_split(terminal):
@@ -278,31 +290,48 @@ def test_the_measurement_can_see_a_split(terminal):
 
 @reproduces(FocusStayedOnDismissedItem)
 def test_esc_from_the_submenu_hands_focus_back_to_the_terminal(terminal):
+    """One Esc closes the submenu and must leave focus on something that is still
+    on screen (the Split pane entry, as a MenuFlyout would); a second Esc closes
+    the menu and focus must be back on the terminal."""
     item = _open_split_submenu(terminal)
     opened = len(_popups(terminal))
     _press_esc_and_wait_for_the_flyout(terminal, opened)
-    focused = _focus_settles(_is_terminal, timeout=3.0)
-    if not _is_terminal(focused):
+    focused = _focus_settles(lambda e: e.name != item.name, timeout=3.0)
+    if focused.name == item.name or not focused.is_visible():
         raise FocusStayedOnDismissedItem(
             f"after Esc, focus is on {focused.describe()} rect={focused.bounding_rectangle} "
-            f"(the item that had it was {item.name!r}), not on the terminal"
+            f"(the item that had it was {item.name!r}); nothing on screen has it"
+        )
+    left = _dismiss_with_esc(terminal)
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    if left or not _is_terminal(focused):
+        raise FocusStayedOnDismissedItem(
+            f"after closing the menu with Esc, {left} popup(s) remain and focus is on "
+            f"{focused.describe()}, not on the terminal"
         )
 
 
-@reproduces(DismissedItemWasInvoked)
+@reproduces((FocusStayedOnDismissedItem, DismissedItemWasInvoked))
 def test_enter_after_esc_reaches_the_shell_not_the_dismissed_item(terminal):
+    """Esc until the menu is gone, then Enter: it must reach the shell. On the
+    build with the bug, Esc after the submenu cannot close the menu at all (the
+    key goes to the hidden button), and Enter splits the pane."""
     _open_split_submenu(terminal)
-    opened = len(_popups(terminal))
-    _press_esc_and_wait_for_the_flyout(terminal, opened)
+    left = _dismiss_with_esc(terminal)
+    if left:
+        raise FocusStayedOnDismissedItem(
+            f"{left} popup(s) still open after three Esc presses: the keys went to the "
+            "dismissed submenu item"
+        )
     send_keys("{ENTER}")
     # Waits for a split to finish rather than for the count to move: the tree reads
     # 0 panes for a moment while a new one is being built.
     panes = settled(lambda: len(_panes(terminal)), lambda n: n == 2, timeout=5.0)
     time.sleep(1.0)  # hold the result for the recording
-    if panes != 1:
+    if panes != 1 or _popups(terminal):
         raise DismissedItemWasInvoked(
-            f"Enter after Esc left {panes} panes: the dismissed 'Duplicate ...' item was "
-            "still the keyboard focus and got invoked"
+            f"Enter after Esc left {panes} panes and {len(_popups(terminal))} popup(s): the "
+            "dismissed item was still the keyboard focus and got invoked"
         )
 
 
