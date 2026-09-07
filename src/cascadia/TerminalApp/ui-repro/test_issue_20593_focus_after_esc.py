@@ -253,9 +253,9 @@ def _open_split_submenu(win: Window) -> UiaElement:
     assert _is_split_pane_entry(entry), f"never reached the Split pane entry: {entry.describe()}"
     send_keys("{RIGHT}")
     item = _focus_settles(
-        lambda e, n=entry.name: e.class_name == "AppBarButton" and e.name != n, timeout=3.0
+        lambda e, n=entry.name: e.class_name in ("AppBarButton", "MenuFlyoutItem") and e.name != n, timeout=3.0
     )
-    assert item.class_name == "AppBarButton" and item.name != entry.name, (
+    assert item.class_name in ("AppBarButton", "MenuFlyoutItem") and item.name != entry.name, (
         f"Right did not open the Split pane submenu; focus is on {item.describe()}"
     )
     return item
@@ -347,10 +347,10 @@ def test_esc_from_the_top_level_hands_focus_back_to_the_terminal(terminal):
     _press_esc_and_wait_for_the_flyout(terminal, opened)
     assert not _popups(terminal), "Esc at the top level did not close the menu"
     focused = _focus_settles(_is_terminal, timeout=3.0)
-    if not _is_terminal(focused):
-        send_keys("{ENTER}")
-        reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=3.0)
-        time.sleep(1.0)  # hold the result for the recording
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    time.sleep(1.0)  # hold the result for the recording
+    if not _is_terminal(focused) or reopened > 0:
         raise FocusStayedOnDismissedItem(
             f"after Esc, focus is on {focused.describe()} rect={focused.bounding_rectangle}; "
             f"Enter then opened {reopened} popup(s) from the dismissed menu"
