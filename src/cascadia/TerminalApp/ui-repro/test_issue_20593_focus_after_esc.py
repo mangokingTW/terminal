@@ -663,8 +663,7 @@ def test_more_button_esc_returns_focus_to_terminal(terminal):
     time.sleep(0.5)  # human cadence: show MoreButton focused
 
     # Dismiss menu with Esc
-    opened = len(_popups(terminal))
-    left = _press_esc_and_wait_for_the_flyout(terminal, opened)
+    left = _dismiss_with_esc(terminal)
     assert not left, "Esc did not close the menu when focus was on MoreButton"
 
     focused = _focus_settles(_is_terminal, timeout=3.0)
@@ -693,13 +692,10 @@ def test_submenu_light_dismiss_detached_safe(terminal):
     assert len(_popups(terminal)) >= 2, "expected at least 2 popups for parent and submenu"
     time.sleep(0.5)
 
-    # Click the terminal canvas outside the flyouts to light-dismiss all popups
-    panes = _panes(terminal)
-    assert panes, "no pane found"
-    pane = panes[0]
-    left, top, right, bottom = pane.bounding_rectangle
-    # Click near bottom-right of the terminal canvas, away from top-left flyouts
-    Mouse().click(right - 50, bottom - 50)
+    # Click near bottom-right of terminal window outside flyouts to light-dismiss all popups
+    rect = wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(terminal.hwnd, ctypes.byref(rect))
+    Mouse().click(rect.right - 80, rect.bottom - 80)
 
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
     assert no_popups == 0, f"light-dismiss left {no_popups} popup(s) open"
