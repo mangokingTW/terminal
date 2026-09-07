@@ -3948,6 +3948,11 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - <none>
     void TermControl::_takeFocusBackFromContextMenu(const winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout& menu)
     {
+        if (!menu)
+        {
+            return;
+        }
+
         const auto root = XamlRoot();
         if (!root)
         {
@@ -3994,6 +3999,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                         if (auto cb = p.try_as<Controls::CommandBar>())
                         {
                             focusedBar = cb;
+                            break;
+                        }
+                        if (p.try_as<Controls::Primitives::Popup>())
+                        {
                             break;
                         }
                     }

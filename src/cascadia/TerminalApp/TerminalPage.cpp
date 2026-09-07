@@ -5561,6 +5561,10 @@ namespace winrt::TerminalApp::implementation
                                     focusedBar = cb;
                                     break;
                                 }
+                                if (p.try_as<WUX::Controls::Primitives::Popup>())
+                                {
+                                    break;
+                                }
                             }
                         }
                     }
