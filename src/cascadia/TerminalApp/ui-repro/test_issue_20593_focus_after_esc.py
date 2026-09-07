@@ -101,14 +101,17 @@ def settled(read: Callable[[], Any], matches: Callable[[Any], bool], timeout: fl
 
 
 def _wt_exe() -> Path:
+    """The launcher: wt.exe where the distribution ships one, else WindowsTerminal.exe
+    itself, which takes the same command line (a Dev build's zip carries no wt.exe)."""
     override = os.environ.get("WINTEGRATE_TERMINAL_EXE")
-    exe = Path(override) if override else PORTABLE_DIR / "wt.exe"
-    if not exe.exists():
-        pytest.fail(
-            f"Windows Terminal is not at {exe}. The workflow extracts the portable zip to "
-            f"WT_PORTABLE_DIR; locally, set WINTEGRATE_TERMINAL_EXE to a wt.exe."
-        )
-    return exe
+    candidates = [Path(override)] if override else [PORTABLE_DIR / "wt.exe", PORTABLE_DIR / PROCESS]
+    for exe in candidates:
+        if exe.exists():
+            return exe
+    pytest.fail(
+        f"Windows Terminal is not at any of {[str(c) for c in candidates]}. The workflow "
+        "extracts the portable zip to WT_PORTABLE_DIR; locally, set WINTEGRATE_TERMINAL_EXE."
+    )
 
 
 def _image_path(pid: int) -> str:
