@@ -665,3 +665,106 @@ def test_more_button_esc_returns_focus_to_terminal(terminal):
     reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
     assert reopened == 0, f"Enter after Esc re-opened {reopened} popup(s)"
 
+
+def test_submenu_light_dismiss_detached_safe(terminal):
+    """Edge case: light-dismiss while a nested submenu is open.
+
+    When a nested submenu (e.g. Split pane submenu) is open and the user clicks
+    outside the flyouts (light-dismiss), both the parent menu and child submenu
+    close. If the parent menu closes first and clears its SecondaryCommands,
+    the owner button ('Split pane') is detached from the visual tree.
+    The submenu's Closed handler must NOT crash, must NOT trap focus on the detached
+    button, and Enter must not trigger orphaned flyout actions.
+    """
+    _open_split_submenu(terminal)
+    assert len(_popups(terminal)) >= 2, "expected at least 2 popups for parent and submenu"
+    time.sleep(0.5)
+
+    # Click the window title bar to light-dismiss all popups
+    rect = wintypes.RECT()
+    ctypes.windll.user32.GetWindowRect(terminal.hwnd, ctypes.byref(rect))
+    title_cx = (rect.left + rect.right) // 2
+    title_cy = rect.top + 10
+    Mouse().click(title_cx, title_cy)
+
+    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
+    assert no_popups == 0, f"light-dismiss left {no_popups} popup(s) open"
+    time.sleep(0.5)
+
+    # Focus must not remain on any AppBarButton
+    focused = _focus_settles(lambda e: e.class_name != "AppBarButton", timeout=3.0)
+    assert focused.class_name != "AppBarButton", (
+        f"focus remained trapped on {focused.describe()} after light-dismiss of submenu"
+    )
+
+    # Verify Enter does not re-open any dismissed popup
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    assert reopened == 0, f"Enter after light-dismiss re-opened {reopened} popup(s)"
+
+
+def test_cross_pane_more_button_click_does_not_steal_focus(terminal):
+    """Edge case: Pane A's menu is open, user clicks MoreButton on Pane B.
+
+    With bounded ancestor traversal, Pane A's _takeFocusBackFromContextMenu
+    restricts the MoreButton ancestor check to its own CommandBar.
+    When Pane B's menu is opened and its MoreButton receives focus, Pane A's
+    closing handler must NOT falsely match Pane B's MoreButton as its own
+    and steal focus back to Pane A.
+    """
+    _split_pane_horizontal(terminal)
+    panes = _panes(terminal)
+    assert len(panes) == 2, f"expected 2 panes, got {len(panes)}"
+    pane_a, pane_b = panes[0], panes[1]
+
+    # Open Pane A menu
+    _focus_pane(pane_a)
+    send_keys("{APPS}")
+    _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
+    assert _popups(terminal), "pane A menu did not open"
+    time.sleep(0.5)
+
+    # Click Pane B to focus it and dismiss Pane A's menu
+    _focus_pane(pane_b)
+    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
+    assert no_popups == 0, "pane A menu did not dismiss after focusing pane B"
+
+    # Open Pane B menu
+    send_keys("{APPS}")
+    _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
+    b_popups = _popups(terminal)
+    assert b_popups, "pane B menu did not open"
+    time.sleep(0.5)
+
+    # Locate MoreButton on Pane B's menu and focus it
+    more_btn = None
+    for p in b_popups:
+        p_elem = UiaElement.from_handle(p.hwnd)
+        more_btn = p_elem.find_first(automation_id="MoreButton")
+        if more_btn:
+            break
+
+    if more_btn:
+        more_btn.set_focus()
+        time.sleep(0.5)
+    else:
+        send_keys("{RIGHT}")
+        time.sleep(0.5)
+
+    # Dismiss Pane B menu with Esc
+    _dismiss_with_esc(terminal)
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)
+    assert _is_terminal(focused), (
+        f"after closing Pane B menu, focus is on {focused.describe()}, not a TermControl"
+    )
+
+    # Must be on Pane B, not stolen back to Pane A
+    fb_rect = focused.bounding_rectangle
+    pb_rect = pane_b.bounding_rectangle
+    assert fb_rect == pb_rect, (
+        f"focus ended on rect {fb_rect} (Pane A is {pane_a.bounding_rectangle}, "
+        f"Pane B is {pb_rect}): focus was stolen back to Pane A"
+    )
+
+
