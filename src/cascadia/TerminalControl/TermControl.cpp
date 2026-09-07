@@ -429,7 +429,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         ContextMenu().Closed([weakThis = get_weak()](auto&&, auto&&) {
             if (auto control{ weakThis.get() }; control && !control->_IsClosing())
             {
-                const auto& menu{ control->ContextMenu() };
+                const auto menu{ control->ContextMenu() };
                 control->_takeFocusBackFromContextMenu(menu);
                 menu.PrimaryCommands().Clear();
                 menu.SecondaryCommands().Clear();
@@ -446,7 +446,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         SelectionContextMenu().Closed([weakThis = get_weak()](auto&&, auto&&) {
             if (auto control{ weakThis.get() }; control && !control->_IsClosing())
             {
-                const auto& menu{ control->SelectionContextMenu() };
+                const auto menu{ control->SelectionContextMenu() };
                 control->_takeFocusBackFromContextMenu(menu);
                 menu.PrimaryCommands().Clear();
                 menu.SecondaryCommands().Clear();
@@ -3957,15 +3957,36 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         const auto isElementInMenu = [&]() {
             const auto containsElement = [&](const auto& target) {
-                for (const auto& element : menu.PrimaryCommands())
-                {
-                    if (element == target) return true;
-                }
-                for (const auto& element : menu.SecondaryCommands())
-                {
-                    if (element == target) return true;
-                }
-                return false;
+                const auto checkCommands = [&](const auto& commands, const auto& self) -> bool {
+                    for (const auto& element : commands)
+                    {
+                        if (element == target)
+                        {
+                            return true;
+                        }
+                        if (const auto btn = element.try_as<Controls::AppBarButton>())
+                        {
+                            if (const auto cbf = btn.Flyout().try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                            {
+                                if (self(cbf.PrimaryCommands(), self) || self(cbf.SecondaryCommands(), self))
+                                {
+                                    return true;
+                                }
+                            }
+                            if (const auto cbf = btn.ContextFlyout().try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                            {
+                                if (self(cbf.PrimaryCommands(), self) || self(cbf.SecondaryCommands(), self))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+                    return false;
+                };
+
+                return checkCommands(menu.PrimaryCommands(), checkCommands) ||
+                       checkCommands(menu.SecondaryCommands(), checkCommands);
             };
 
             if (containsElement(focused))
@@ -3979,40 +4000,81 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 return false;
             }
 
-            // Check if focused element is the internal MoreButton ("...") of this flyout
+            // Check if focused element is the internal MoreButton ("...") of this flyout or a child flyout
             if (const auto fe = focused.try_as<FrameworkElement>())
             {
                 if (fe.Name() == L"MoreButton")
                 {
-                    // Ensure this MoreButton belongs to this specific menu by checking
-                    // for a shared ancestor (the CommandBarFlyoutCommandBar).
-                    DependencyObject cmdDo{ nullptr };
-                    if (menu.PrimaryCommands().Size() > 0)
+                    // Find the immediate containing CommandBar ancestor of the focused MoreButton.
+                    // Restricting traversal to the CommandBar boundary prevents false-positive focus
+                    // stealing from MoreButtons in other panes or UI controls.
+                    Controls::CommandBar focusedBar{ nullptr };
+                    for (auto p = Media::VisualTreeHelper::GetParent(focusedDo); p; p = Media::VisualTreeHelper::GetParent(p))
                     {
-                        cmdDo = menu.PrimaryCommands().GetAt(0).try_as<DependencyObject>();
-                    }
-                    else if (menu.SecondaryCommands().Size() > 0)
-                    {
-                        cmdDo = menu.SecondaryCommands().GetAt(0).try_as<DependencyObject>();
+                        if (auto cb = p.try_as<Controls::CommandBar>())
+                        {
+                            focusedBar = cb;
+                            break;
+                        }
                     }
 
-                    if (cmdDo)
+                    if (focusedBar)
                     {
-                        for (auto p1 = Media::VisualTreeHelper::GetParent(focusedDo); p1; p1 = Media::VisualTreeHelper::GetParent(p1))
-                        {
-                            for (auto p2 = Media::VisualTreeHelper::GetParent(cmdDo); p2; p2 = Media::VisualTreeHelper::GetParent(p2))
+                        const auto checkCmdBar = [&](const DependencyObject& cmdDo) {
+                            if (!cmdDo)
                             {
-                                if (p1 == p2)
+                                return false;
+                            }
+                            for (auto p = Media::VisualTreeHelper::GetParent(cmdDo); p; p = Media::VisualTreeHelper::GetParent(p))
+                            {
+                                if (p == focusedBar)
                                 {
                                     return true;
                                 }
+                                if (p.try_as<Controls::CommandBar>())
+                                {
+                                    break;
+                                }
                             }
+                            return false;
+                        };
+
+                        const auto checkFlyoutCmdBar = [&](const auto& flyout, const auto& self) -> bool {
+                            if (const auto cbf = flyout.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                            {
+                                if (cbf.PrimaryCommands().Size() > 0 &&
+                                    checkCmdBar(cbf.PrimaryCommands().GetAt(0).try_as<DependencyObject>()))
+                                {
+                                    return true;
+                                }
+                                if (cbf.SecondaryCommands().Size() > 0 &&
+                                    checkCmdBar(cbf.SecondaryCommands().GetAt(0).try_as<DependencyObject>()))
+                                {
+                                    return true;
+                                }
+                                for (const auto& el : cbf.SecondaryCommands())
+                                {
+                                    if (const auto btn = el.try_as<Controls::AppBarButton>())
+                                    {
+                                        if (self(btn.Flyout(), self) || self(btn.ContextFlyout(), self))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                        };
+
+                        if (checkFlyoutCmdBar(menu, checkFlyoutCmdBar))
+                        {
+                            return true;
                         }
                     }
                 }
             }
 
-            // Check if focused element is a descendant of any command in this menu
+            // Check if focused element is a descendant of any command in this menu (or submenus)
             for (auto parent = Media::VisualTreeHelper::GetParent(focusedDo);
                  parent;
                  parent = Media::VisualTreeHelper::GetParent(parent))

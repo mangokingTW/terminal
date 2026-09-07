@@ -5497,15 +5497,22 @@ namespace winrt::TerminalApp::implementation
         // focus still on one of its own buttons, hand it back to the button that
         // opened it. (The top-level flyout does the same for the control itself
         // in TermControl.)
-        auto handBackFocusOnClose = [](const MUX::Controls::CommandBarFlyout& subMenu, const AppBarButton& owner) {
-            subMenu.Closed([weakMenu = winrt::make_weak(subMenu), weakOwner = winrt::make_weak(owner)](auto&&, auto&&) {
+        auto handBackFocusOnClose = [weakControl = winrt::make_weak(control)](const MUX::Controls::CommandBarFlyout& subMenu, const AppBarButton& owner) {
+            subMenu.Closed([weakMenu = winrt::make_weak(subMenu), weakOwner = winrt::make_weak(owner), weakControl](auto&&, auto&&) {
                 const auto menu{ weakMenu.get() };
                 const auto owner{ weakOwner.get() };
                 if (!menu || !owner)
                 {
                     return;
                 }
-                const auto root{ owner.XamlRoot() };
+                auto root{ owner.XamlRoot() };
+                if (!root)
+                {
+                    if (const auto control{ weakControl.get() })
+                    {
+                        root = control.XamlRoot();
+                    }
+                }
                 if (!root)
                 {
                     return;
@@ -5540,6 +5547,56 @@ namespace winrt::TerminalApp::implementation
                         return false;
                     }
 
+                    // Check if focused element is the internal MoreButton of this submenu
+                    if (const auto fe = focused.try_as<WUX::FrameworkElement>())
+                    {
+                        if (fe.Name() == L"MoreButton")
+                        {
+                            WUX::Controls::CommandBar focusedBar{ nullptr };
+                            for (auto p = WUX::Media::VisualTreeHelper::GetParent(focusedDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
+                            {
+                                if (auto cb = p.try_as<WUX::Controls::CommandBar>())
+                                {
+                                    focusedBar = cb;
+                                    break;
+                                }
+                            }
+
+                            if (focusedBar)
+                            {
+                                const auto checkCmdBar = [&](const WUX::DependencyObject& cmdDo) {
+                                    if (!cmdDo)
+                                    {
+                                        return false;
+                                    }
+                                    for (auto p = WUX::Media::VisualTreeHelper::GetParent(cmdDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
+                                    {
+                                        if (p == focusedBar)
+                                        {
+                                            return true;
+                                        }
+                                        if (p.try_as<WUX::Controls::CommandBar>())
+                                        {
+                                            break;
+                                        }
+                                    }
+                                    return false;
+                                };
+
+                                if (menu.PrimaryCommands().Size() > 0 &&
+                                    checkCmdBar(menu.PrimaryCommands().GetAt(0).try_as<WUX::DependencyObject>()))
+                                {
+                                    return true;
+                                }
+                                if (menu.SecondaryCommands().Size() > 0 &&
+                                    checkCmdBar(menu.SecondaryCommands().GetAt(0).try_as<WUX::DependencyObject>()))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
+
                     // Check if focused element is a descendant of any command in this submenu
                     for (auto parent = WUX::Media::VisualTreeHelper::GetParent(focusedDo);
                          parent;
@@ -5556,7 +5613,14 @@ namespace winrt::TerminalApp::implementation
 
                 if (isElementInMenu())
                 {
-                    owner.Focus(FocusState::Keyboard);
+                    if (WUX::Media::VisualTreeHelper::GetParent(owner))
+                    {
+                        owner.Focus(FocusState::Keyboard);
+                    }
+                    else if (const auto control{ weakControl.get() })
+                    {
+                        control.Focus(FocusState::Programmatic);
+                    }
                 }
             });
         };
