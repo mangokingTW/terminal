@@ -1,0 +1,165 @@
+# Builds this branch (x64 Release), packs it the way the release pipeline packs
+# the portable zip, and runs the reproduction in src/cascadia/TerminalApp/ui-repro
+# against the result with `--runxfail`: the three tests that are xfail on the
+# released build must pass on this one, or the fix did not take.
+#
+# Building and verifying are separate jobs. Building takes ~20 minutes; verification
+# takes ~2 minutes. With `reuse_run_id`, a fresh verification can run against bundles
+# produced by an earlier run without rebuilding.
+name: Build and verify the context-menu focus fix
+
+on:
+  workflow_dispatch:
+    inputs:
+      reuse_run_id:
+        description: "Run id whose context-menu-focus-fix-x64 artifact to verify instead of building again"
+        required: false
+        default: ""
+  push:
+    branches: [fix/context-menu-focus-after-esc, 'test/**']
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    if: github.event.inputs.reuse_run_id == ''
+    runs-on: windows-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+
+      # 64-bit MSBuild, as the release pipeline's VSBuild task uses
+      # (msbuildArchitecture: x64). With the 32-bit one the librarian's host
+      # defaults /MACHINE to X86 and the static libs fail with LNK1112.
+      - uses: microsoft/setup-msbuild@v2
+        with:
+          msbuild-architecture: x64
+
+      # The release pipeline's steps, translated from Azure Pipelines. The NuGet
+      # feed is the project's public one; anonymous restore is what a clone gets.
+      - name: Detect Visual Studio's vcpkg
+        shell: pwsh
+        run: |
+          $VsInstallRoot = & 'C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe' -requires Microsoft.VisualStudio.Component.Vcpkg -property installationPath -latest
+          if ([string]::IsNullOrEmpty($VsInstallRoot)) { throw "no Visual Studio with the vcpkg component" }
+          $VcpkgRoot = Join-Path $VsInstallRoot "VC\vcpkg"
+          Write-Host "VCPKG_ROOT=$VcpkgRoot"
+          "VCPKG_ROOT=$VcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Generate NOTICE.html
+        shell: pwsh
+        run: .\build\scripts\Generate-ThirdPartyNotices.ps1 -MarkdownNoticePath .\NOTICE.md -OutputPath .\src\cascadia\CascadiaPackage\NOTICE.html
+
+      - name: Restore NuGet packages
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          nuget restore build/packages.config -ConfigFile NuGet.config -PackagesDirectory packages
+          if ($LASTEXITCODE -ne 0) { throw "restore of build/packages.config failed" }
+          msbuild OpenConsole.slnx /t:Restore /p:Configuration=Release /p:Platform=x64 /m /v:minimal
+          if ($LASTEXITCODE -ne 0) { throw "solution restore failed" }
+          nuget restore dep/nuget/packages.config -ConfigFile NuGet.config -PackagesDirectory packages
+          if ($LASTEXITCODE -ne 0) { throw "restore of dep/nuget/packages.config failed" }
+
+      # build/scripts/Set-LatestVCToolsVersion.ps1 speaks Azure Pipelines
+      # (##vso[task.setvariable]); the same value goes to GITHUB_ENV here.
+      - name: Pin VCToolsVersion to the toolset that is actually installed
+        shell: pwsh
+        run: |
+          $out = .\build\scripts\Set-LatestVCToolsVersion.ps1
+          $out | ForEach-Object { Write-Host $_ }
+          $line = $out | Where-Object { $_ -like 'Latest VCToolsVersion:*' } | Select-Object -First 1
+          if (-not $line) { throw "could not determine VCToolsVersion" }
+          $version = ($line -split ':\s*', 2)[1].Trim()
+          "VCToolsVersion=$version" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Build Terminal (x64 Release)
+        shell: pwsh
+        timeout-minutes: 240
+        run: |
+          msbuild OpenConsole.slnx /p:Configuration=Release /p:Platform=x64 /p:AppxSymbolPackageEnabled=false /t:Terminal\CascadiaPackage /m /v:minimal /bl:msbuild.binlog
+          if ($LASTEXITCODE -ne 0) { throw "build failed" }
+
+      - name: Pack the portable distribution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $msix = Get-ChildItem -Recurse -Filter 'CascadiaPackage*.msix' | Select-Object -First 1
+          if (-not $msix) { throw "no CascadiaPackage*.msix was built" }
+          $xaml = Get-Item 'src\cascadia\CascadiaPackage\AppPackages\*\Dependencies\x64\Microsoft.UI.Xaml*.appx' | Select-Object -First 1
+          if (-not $xaml) { throw "no Microsoft.UI.Xaml appx beside the package" }
+          $out = New-Item -ItemType Directory -Force -Path (Join-Path $env:RUNNER_TEMP 'unpackaged')
+          .\build\scripts\New-UnpackagedTerminalDistribution.ps1 -PortableMode -TerminalAppX $msix.FullName -XamlAppX $xaml.FullName -Destination $out.FullName
+          $zip = Get-ChildItem $out.FullName -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw "New-UnpackagedTerminalDistribution.ps1 produced no zip" }
+          "BUILT_ZIP=$($zip.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Upload the build bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: context-menu-focus-fix-x64
+          path: |
+            ${{ env.BUILT_ZIP }}
+            msbuild.binlog
+          if-no-files-found: error
+          retention-days: 14
+
+  verify:
+    if: |
+      always() &&
+      (needs.build.result == 'success' || needs.build.result == 'skipped')
+    needs: build
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [windows-latest, windows-11-arm]
+    name: "verify on ${{ matrix.runner }}"
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mangokingTW/wintegrate/.github/actions/setup-windows-gui-test@main
+        with:
+          wintegrate-version: ">=0.6.2"
+
+      - name: Download the build bundle
+        uses: actions/download-artifact@v4
+        with:
+          name: context-menu-focus-fix-x64
+          path: download
+          run-id: ${{ github.event.inputs.reuse_run_id }}
+          github-token: ${{ github.event.inputs.reuse_run_id != '' && github.token || '' }}
+
+      - name: Unpack and check the distribution
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $zip = Get-ChildItem download -Recurse -Filter '*.zip' | Select-Object -First 1
+          if (-not $zip) { throw "no built zip was found in download" }
+          $dir = Join-Path $env:RUNNER_TEMP 'wt'
+          Expand-Archive -LiteralPath $zip.FullName -DestinationPath $dir -Force
+          $exe = Get-ChildItem $dir -Recurse -Filter 'WindowsTerminal.exe' | Select-Object -First 1
+          if (-not $exe) { throw "no WindowsTerminal.exe in the distribution" }
+          Write-Host ("unpacked: {0} ({1})" -f $exe.FullName, $exe.VersionInfo.FileVersion)
+          $marker = Join-Path $exe.DirectoryName '.portable'
+          if (-not (Test-Path $marker)) {
+            New-Item -ItemType File -Path $marker -Force | Out-Null
+          }
+          Write-Host ("portable marker: {0}" -f (Test-Path $marker))
+          "WT_PORTABLE_DIR=$($exe.DirectoryName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Verify the fix with the reproduction
+        env:
+          WINTEGRATE_RECORD: "1"
+        run: pytest src/cascadia/TerminalApp/ui-repro -v -rxX -s --runxfail -k "not pinned_version"
+
+      - name: Upload the recording
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-recording-${{ matrix.runner }}
+          path: recording-artifacts/
+          if-no-files-found: warn
+          retention-days: 14
