@@ -3992,12 +3992,20 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 return false;
             }
 
-            // Check if focused element or any visual ancestor is in the menu commands or child flyouts
+            // Check if focused element or any visual ancestor is in the menu commands or child flyouts.
+            // Bounded to CommandBar or Popup to avoid walking up the entire visual tree on external focus.
             for (auto cur = focusedDo; cur; cur = Media::VisualTreeHelper::GetParent(cur))
             {
-                if (containsCommand(cur))
+                if (cur.try_as<Controls::ICommandBarElement>())
                 {
-                    return true;
+                    if (containsCommand(cur))
+                    {
+                        return true;
+                    }
+                }
+                if (cur.try_as<Controls::CommandBar>() || cur.try_as<Controls::Primitives::Popup>())
+                {
+                    break;
                 }
             }
 
@@ -4022,9 +4030,9 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                     if (focusedBar)
                     {
                         const auto checkBar = [&](const auto& commands, const auto& self) -> bool {
-                            if (commands.Size() > 0)
+                            for (const auto& element : commands)
                             {
-                                if (const auto cmdDo = commands.GetAt(0).try_as<DependencyObject>())
+                                if (const auto cmdDo = element.try_as<DependencyObject>())
                                 {
                                     for (auto p = Media::VisualTreeHelper::GetParent(cmdDo); p; p = Media::VisualTreeHelper::GetParent(p))
                                     {
@@ -4038,9 +4046,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                                         }
                                     }
                                 }
-                            }
-                            for (const auto& element : commands)
-                            {
                                 if (const auto btn = element.try_as<Controls::AppBarButton>())
                                 {
                                     for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })

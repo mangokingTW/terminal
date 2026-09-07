@@ -5561,12 +5561,20 @@ namespace winrt::TerminalApp::implementation
                         return false;
                     }
 
-                    // Check if focused element or any visual ancestor is in the submenu commands or child flyouts
+                    // Check if focused element or any visual ancestor is in the submenu commands or child flyouts.
+                    // Bounded to CommandBar or Popup to avoid walking up the entire visual tree on external focus.
                     for (auto cur = focusedDo; cur; cur = WUX::Media::VisualTreeHelper::GetParent(cur))
                     {
-                        if (containsCommand(cur))
+                        if (cur.try_as<WUX::Controls::ICommandBarElement>())
                         {
-                            return true;
+                            if (containsCommand(cur))
+                            {
+                                return true;
+                            }
+                        }
+                        if (cur.try_as<WUX::Controls::CommandBar>() || cur.try_as<WUX::Controls::Primitives::Popup>())
+                        {
+                            break;
                         }
                     }
 
@@ -5588,9 +5596,9 @@ namespace winrt::TerminalApp::implementation
                             if (focusedBar)
                             {
                                 const auto checkBar = [&](const auto& commands, const auto& self) -> bool {
-                                    if (commands.Size() > 0)
+                                    for (const auto& element : commands)
                                     {
-                                        if (const auto cmdDo = commands.GetAt(0).try_as<WUX::DependencyObject>())
+                                        if (const auto cmdDo = element.try_as<WUX::DependencyObject>())
                                         {
                                             for (auto p = WUX::Media::VisualTreeHelper::GetParent(cmdDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
                                             {
@@ -5604,9 +5612,6 @@ namespace winrt::TerminalApp::implementation
                                                 }
                                             }
                                         }
-                                    }
-                                    for (const auto& element : commands)
-                                    {
                                         if (const auto btn = element.template try_as<AppBarButton>())
                                         {
                                             for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
@@ -5637,18 +5642,13 @@ namespace winrt::TerminalApp::implementation
 
                 if (isElementInMenu())
                 {
-                    bool focusedOwner = false;
                     if (WUX::Media::VisualTreeHelper::GetParent(owner))
                     {
-                        focusedOwner = owner.Focus(FocusState::Keyboard);
+                        owner.Focus(FocusState::Keyboard);
                     }
-                    if (!focusedOwner)
-                    {
-                        if (const auto control{ weakControl.get() })
-                        {
-                            control.Focus(FocusState::Programmatic);
-                        }
-                    }
+                    // If owner is detached (e.g. during light-dismiss of the entire flyout hierarchy),
+                    // do not force focus to the terminal here: the top-level menu's Closed handler in
+                    // TermControl will handle focus restoration and respect open UI states like the Find search box.
                 }
             });
         };
