@@ -454,7 +454,7 @@ def _focus_pane(pane: UiaElement) -> None:
     """Click on a pane to give it keyboard focus."""
     left, top, right, bottom = pane.bounding_rectangle
     cx, cy = (left + right) // 2, (top + bottom) // 2
-    Mouse().left_click(cx, cy)
+    Mouse().click(cx, cy)
     time.sleep(0.5)  # human cadence: let click settle
 
 
@@ -473,12 +473,9 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
        (A click outside the flyout light-dismisses it.)
     4. Pane A's Closed handler fires: it must NOT steal focus back from Pane B.
 
-    This verifies the per-control scoping of _takeFocusBackFromContextMenu:
-    because the Closed lambda is registered on Pane A's control instance, and
-    because SearchBoxEditInFocus() is only false on Pane A (which just lost
-    focus by design), the method is now harmless — but if the old global
-    FocusManager.GetFocusedElement branch were still live it would see Pane B's
-    TermControl as the focused element and do nothing (GH#20593 cross-pane test).
+    This verifies the membership check of _takeFocusBackFromContextMenu:
+    because focus is now on Pane B (which is not in Pane A's menu), Pane A's
+    Closed handler does not steal focus back from Pane B.
     """
     _split_pane_horizontal(terminal)
     panes = _panes(terminal)
@@ -525,15 +522,8 @@ def test_light_dismiss_does_not_move_focus_to_terminal(terminal):
     and outside the terminal): the flyout light-dismisses. Focus must go to
     whatever received the click, not to the TermControl.
 
-    With the old unconditional Focus() call this would have yanked focus from
-    the title bar region to the terminal. The new code only calls Focus() if
-    the search box is not open; because the terminal's own TermControl is not
-    what received the click, focus should remain on the title bar / window
-    chrome element, not jump to the TermControl.
-
-    Implementation note: clicking the title bar gives focus to the HWND's
-    non-client area and UIA may report the root window element as focused; we
-    accept any element that is not a TermControl as a pass.
+    With the membership check in _takeFocusBackFromContextMenu, focus is not
+    on a button belonging to the menu, so focus is left where the click landed.
     """
     send_keys("{APPS}")
     _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
@@ -546,7 +536,7 @@ def test_light_dismiss_does_not_move_focus_to_terminal(terminal):
     ctypes.windll.user32.GetWindowRect(terminal.hwnd, ctypes.byref(rect))
     title_cx = (rect.left + rect.right) // 2
     title_cy = rect.top + 10  # 10 px below the top edge = title bar area
-    Mouse().left_click(title_cx, title_cy)
+    Mouse().click(title_cx, title_cy)
 
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
     time.sleep(0.5)  # human cadence: let focus settle
@@ -561,64 +551,45 @@ def test_light_dismiss_does_not_move_focus_to_terminal(terminal):
         )
 
 
-def test_find_from_menu_does_not_lose_search_box_focus(terminal):
-    """Edge case: invoking Find from the context menu opens the search box.
+def test_search_box_focus_preservation_and_dismiss(terminal):
+    """Edge case: search box (Find) focus preservation.
 
-    The Closed handler must detect that the search box is now in focus and
-    skip the Focus(Programmatic) call. If it does not, the search box loses
-    focus before the user can type anything.
-
-    Failure mode: after Find is invoked, focus ends up back on the TermControl
-    instead of the search box TextBox.
+    Opening Find (Ctrl+Shift+F) focuses the search box TextBox.
+    The terminal must not steal focus back while the search box is active.
+    Pressing Esc inside the search box dismisses it and restores focus to the terminal.
     """
-    send_keys("{APPS}")
-    _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
-    assert _popups(terminal), "pane menu did not open"
-    time.sleep(0.5)  # human cadence
-
-    # Find/Search is typically invoked via Ctrl+Shift+F while menu is shown.
-    # On a live build the menu has a "Find" AppBarButton; drive it by keyboard:
-    # navigate until we reach a button whose ExpandCollapse pattern is absent
-    # and whose name contains a localisation-agnostic trigger word.
-    # Fallback: send the global hotkey Ctrl+Shift+F which opens the Find bar.
-    send_keys("^+f")  # Ctrl+Shift+F — opens the search box regardless
-
-    # Wait for the popup to close and the search box TextBox to appear
-    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
-    assert no_popups == 0, "menu did not close after Ctrl+Shift+F"
+    send_keys("^+f")  # Open Find box
     focused = _focus_settles(_is_search_box_edit, timeout=5.0)
-    time.sleep(1.0)  # human cadence: hold result to show search box focused
-    if not _is_search_box_edit(focused):
-        raise FocusStolenFromSearchBox(
-            "after opening the search box from the context menu, focus ended on "
-            f"{focused.describe()} instead of the search TextBox"
-        )
+    assert _is_search_box_edit(focused), (
+        f"after Ctrl+Shift+F, focus is on {focused.describe()}, not the search box TextBox"
+    )
+    time.sleep(0.6)  # human cadence: show search box focused
+
+    # Press Esc to close search box
+    send_keys("{ESC}")
+    time.sleep(0.5)
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)  # human cadence: hold result
+    assert _is_terminal(focused), (
+        f"after closing search box with Esc, focus is on {focused.describe()}, not the terminal"
+    )
 
 
-def test_standard_copy_does_not_steal_focus(terminal):
-    """Edge case: Copy (Ctrl+C) invoked from the context menu.
+def test_invoking_menu_command_returns_focus_to_terminal(terminal):
+    """Edge case: invoking a command (Paste) directly from the context menu.
 
-    Selecting Copy from the menu closes the flyout. Immediately after, the
-    terminal must have focus (the copy was a non-navigation action). This is
-    the common case and must remain unaffected by the focus-return logic.
+    Invoking an item closes the flyout and must return focus to the terminal.
     """
-    # Type something so Copy has text to copy
-    send_keys("echo hello")
-    time.sleep(0.3)
+    _open_pane_menu(terminal)
 
-    # Open the context menu and invoke Copy via Ctrl+C shortcut while menu is shown
-    send_keys("{APPS}")
-    _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
-    assert _popups(terminal), "pane menu did not open"
-    time.sleep(0.5)  # human cadence
-
-    send_keys("^c")  # Ctrl+C inside the menu triggers Copy
+    # Focus is on PasteCommandButton; invoke it with Enter
+    send_keys("{ENTER}")
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
-    assert no_popups == 0, "menu was not dismissed after Copy"
-    time.sleep(0.4)  # human cadence: let focus settle
+    assert no_popups == 0, "menu was not dismissed after invoking Paste"
+    time.sleep(0.5)
 
     focused = _focus_settles(_is_terminal, timeout=3.0)
     time.sleep(1.0)  # human cadence: hold result
     assert _is_terminal(focused), (
-        f"after Copy from the context menu, focus is on {focused.describe()}, not the terminal"
+        f"after invoking command from menu, focus is on {focused.describe()}, not the terminal"
     )

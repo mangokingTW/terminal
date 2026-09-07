@@ -430,6 +430,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             if (auto control{ weakThis.get() }; control && !control->_IsClosing())
             {
                 const auto& menu{ control->ContextMenu() };
+                control->_takeFocusBackFromContextMenu(menu);
                 menu.PrimaryCommands().Clear();
                 menu.SecondaryCommands().Clear();
                 for (const auto& e : control->_originalPrimaryElements)
@@ -440,13 +441,13 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 {
                     menu.SecondaryCommands().Append(e);
                 }
-                control->_takeFocusBackFromContextMenu();
             }
         });
         SelectionContextMenu().Closed([weakThis = get_weak()](auto&&, auto&&) {
             if (auto control{ weakThis.get() }; control && !control->_IsClosing())
             {
                 const auto& menu{ control->SelectionContextMenu() };
+                control->_takeFocusBackFromContextMenu(menu);
                 menu.PrimaryCommands().Clear();
                 menu.SecondaryCommands().Clear();
                 for (const auto& e : control->_originalSelectedPrimaryElements)
@@ -457,7 +458,6 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 {
                     menu.SecondaryCommands().Append(e);
                 }
-                control->_takeFocusBackFromContextMenu();
             }
         });
         if constexpr (Feature_QuickFix::IsEnabled())
@@ -3937,18 +3937,43 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // - GH#20593: when the pane context menu is dismissed with Esc, XAML leaves
     //   keyboard focus on the AppBarButton that had it, even though the flyout
     //   is gone. The button is off screen but alive, so Enter would invoke it.
-    //   Mirror the pattern used for the tab context menu (GH#5750, Tab.cpp):
-    //   if nothing meaningful took focus (i.e. the search box is not open),
-    //   hand it back to the terminal control. The Closed handler is registered
-    //   per-control, so this method is only ever called for the control whose
-    //   own menu just closed; no cross-pane focus stealing is possible.
-    void TermControl::_takeFocusBackFromContextMenu()
+    //   If the flyout closed with focus still on one of its own commands, nothing
+    //   else took focus, so hand it back to the control. We verify membership against
+    //   the closing menu specifically to avoid cross-pane focus stealing in
+    //   multi-pane layouts.
+    void TermControl::_takeFocusBackFromContextMenu(const winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout& menu)
     {
-        // GH#10112: if the user invoked "Find" from the menu, the search box
-        // just opened and already has focus. Do not steal it back.
-        if (!SearchBoxEditInFocus())
+        const auto root = XamlRoot();
+        if (!root)
         {
-            Focus(FocusState::Programmatic);
+            return;
+        }
+
+        const auto focused = FocusManager::GetFocusedElement(root);
+        if (!focused)
+        {
+            return;
+        }
+
+        const auto checkMembershipAndFocus = [&](const auto& commands) {
+            for (const auto& element : commands)
+            {
+                if (element == focused)
+                {
+                    // GH#10112: if the search box is open, do not steal focus from it.
+                    if (!SearchBoxEditInFocus())
+                    {
+                        Focus(FocusState::Programmatic);
+                    }
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        if (checkMembershipAndFocus(menu.PrimaryCommands()) || checkMembershipAndFocus(menu.SecondaryCommands()))
+        {
+            return;
         }
     }
 
