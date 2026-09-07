@@ -542,6 +542,45 @@ def test_search_box_focus_preservation_and_dismiss(terminal):
     )
 
 
+def test_context_menu_dismiss_while_search_box_open_returns_focus_to_search_box(terminal):
+    """Edge case: context menu opened while search box is active.
+
+    1. Open Find (Ctrl+Shift+F). Focus is on search box TextBox.
+    2. Press Apps key to open context menu. Focus moves to context menu.
+    3. Press Esc to dismiss context menu.
+    4. Focus must return to search box TextBox, NOT remain trapped on dismissed menu button.
+    5. Press Esc again to dismiss search box. Focus returns to terminal.
+    """
+    send_keys("^+f")
+    focused = _focus_settles(_is_search_box_edit, timeout=5.0)
+    assert _is_search_box_edit(focused), "search box did not open"
+    time.sleep(0.5)
+
+    # Open context menu with Apps key
+    send_keys("{APPS}")
+    _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
+    assert _popups(terminal), "context menu did not open"
+    time.sleep(0.5)
+
+    # Press Esc to close context menu
+    opened = len(_popups(terminal))
+    _press_esc_and_wait_for_the_flyout(terminal, opened)
+
+    # Focus must return to search box TextBox
+    focused = _focus_settles(_is_search_box_edit, timeout=3.0)
+    time.sleep(0.8)
+    assert _is_search_box_edit(focused), (
+        f"after dismissing context menu, focus did not return to search box: {focused.describe()}"
+    )
+
+    # Dismiss search box with Esc
+    send_keys("{ESC}")
+    time.sleep(0.5)
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    assert _is_terminal(focused), "closing search box did not return focus to terminal"
+
+
+
 def test_invoking_menu_command_returns_focus_to_terminal(terminal):
     """Edge case: invoking a command (Paste) directly from the context menu.
 

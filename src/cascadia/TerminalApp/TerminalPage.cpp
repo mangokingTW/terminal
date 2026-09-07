@@ -5517,36 +5517,37 @@ namespace winrt::TerminalApp::implementation
                 }
 
                 const auto isElementInMenu = [&]() {
-                    for (const auto& command : menu.PrimaryCommands())
-                    {
-                        if (command == focused) return true;
-                    }
-                    for (const auto& command : menu.SecondaryCommands())
-                    {
-                        if (command == focused) return true;
-                    }
-
-                    // Check if focused element is the internal MoreButton ("...")
-                    if (const auto fe = focused.try_as<WUX::FrameworkElement>())
-                    {
-                        if (fe.Name() == L"MoreButton")
-                        {
-                            return true;
-                        }
-                    }
-
-                    // Check if focused element is a descendant of any command
-                    for (auto parent = WUX::Media::VisualTreeHelper::GetParent(focused.try_as<WUX::DependencyObject>());
-                         parent;
-                         parent = WUX::Media::VisualTreeHelper::GetParent(parent))
-                    {
+                    const auto containsElement = [&](const auto& target) {
                         for (const auto& command : menu.PrimaryCommands())
                         {
-                            if (command == parent) return true;
+                            if (command == target) return true;
                         }
                         for (const auto& command : menu.SecondaryCommands())
                         {
-                            if (command == parent) return true;
+                            if (command == target) return true;
+                        }
+                        return false;
+                    };
+
+                    if (containsElement(focused))
+                    {
+                        return true;
+                    }
+
+                    const auto focusedDo = focused.try_as<WUX::DependencyObject>();
+                    if (!focusedDo)
+                    {
+                        return false;
+                    }
+
+                    // Check if focused element is a descendant of any command in this submenu
+                    for (auto parent = WUX::Media::VisualTreeHelper::GetParent(focusedDo);
+                         parent;
+                         parent = WUX::Media::VisualTreeHelper::GetParent(parent))
+                    {
+                        if (containsElement(parent))
+                        {
+                            return true;
                         }
                     }
 

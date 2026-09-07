@@ -3956,36 +3956,70 @@ namespace winrt::Microsoft::Terminal::Control::implementation
         }
 
         const auto isElementInMenu = [&]() {
-            for (const auto& element : menu.PrimaryCommands())
+            const auto containsElement = [&](const auto& target) {
+                for (const auto& element : menu.PrimaryCommands())
+                {
+                    if (element == target) return true;
+                }
+                for (const auto& element : menu.SecondaryCommands())
+                {
+                    if (element == target) return true;
+                }
+                return false;
+            };
+
+            if (containsElement(focused))
             {
-                if (element == focused) return true;
-            }
-            for (const auto& element : menu.SecondaryCommands())
-            {
-                if (element == focused) return true;
+                return true;
             }
 
-            // Check if focused element is the internal MoreButton ("...")
+            const auto focusedDo = focused.try_as<DependencyObject>();
+            if (!focusedDo)
+            {
+                return false;
+            }
+
+            // Check if focused element is the internal MoreButton ("...") of this flyout
             if (const auto fe = focused.try_as<FrameworkElement>())
             {
                 if (fe.Name() == L"MoreButton")
                 {
-                    return true;
+                    // Ensure this MoreButton belongs to this specific menu by checking
+                    // for a shared ancestor (the CommandBarFlyoutCommandBar).
+                    DependencyObject cmdDo{ nullptr };
+                    if (menu.PrimaryCommands().Size() > 0)
+                    {
+                        cmdDo = menu.PrimaryCommands().GetAt(0).try_as<DependencyObject>();
+                    }
+                    else if (menu.SecondaryCommands().Size() > 0)
+                    {
+                        cmdDo = menu.SecondaryCommands().GetAt(0).try_as<DependencyObject>();
+                    }
+
+                    if (cmdDo)
+                    {
+                        for (auto p1 = Media::VisualTreeHelper::GetParent(focusedDo); p1; p1 = Media::VisualTreeHelper::GetParent(p1))
+                        {
+                            for (auto p2 = Media::VisualTreeHelper::GetParent(cmdDo); p2; p2 = Media::VisualTreeHelper::GetParent(p2))
+                            {
+                                if (p1 == p2)
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
-            // Check if focused element is a descendant of any command
-            for (auto parent = Media::VisualTreeHelper::GetParent(focused.try_as<DependencyObject>());
+            // Check if focused element is a descendant of any command in this menu
+            for (auto parent = Media::VisualTreeHelper::GetParent(focusedDo);
                  parent;
                  parent = Media::VisualTreeHelper::GetParent(parent))
             {
-                for (const auto& element : menu.PrimaryCommands())
+                if (containsElement(parent))
                 {
-                    if (element == parent) return true;
-                }
-                for (const auto& element : menu.SecondaryCommands())
-                {
-                    if (element == parent) return true;
+                    return true;
                 }
             }
 
@@ -3994,8 +4028,13 @@ namespace winrt::Microsoft::Terminal::Control::implementation
 
         if (isElementInMenu())
         {
-            // GH#10112: if the search box is active/open, do not steal focus from it.
-            if (!_searchBox || !_searchBox->IsOpen())
+            // GH#10112: if the search box is active/open, return focus to it;
+            // otherwise restore focus to the terminal control.
+            if (_searchBox && _searchBox->IsOpen())
+            {
+                _searchBox->SetFocusOnTextbox();
+            }
+            else
             {
                 Focus(FocusState::Programmatic);
             }
