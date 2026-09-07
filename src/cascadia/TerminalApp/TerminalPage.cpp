@@ -62,6 +62,8 @@ namespace winrt
     using VirtualKeyModifiers = Windows::System::VirtualKeyModifiers;
 }
 
+constexpr std::wstring_view MoreButtonPartName{ L"MoreButton" };
+
 namespace clipboard
 {
     static SRWLOCK lock = SRWLOCK_INIT;
@@ -5525,15 +5527,36 @@ namespace winrt::TerminalApp::implementation
 
                 const auto isElementInMenu = [&]() {
                     const auto containsElement = [&](const auto& target) {
-                        for (const auto& command : menu.PrimaryCommands())
-                        {
-                            if (command == target) return true;
-                        }
-                        for (const auto& command : menu.SecondaryCommands())
-                        {
-                            if (command == target) return true;
-                        }
-                        return false;
+                        const auto checkCommands = [&](const auto& commands, const auto& self) -> bool {
+                            for (const auto& command : commands)
+                            {
+                                if (command == target)
+                                {
+                                    return true;
+                                }
+                                if (const auto btn = command.template try_as<AppBarButton>())
+                                {
+                                    if (const auto childFlyout = btn.Flyout().template try_as<MUX::Controls::CommandBarFlyout>())
+                                    {
+                                        if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                    if (const auto childFlyout = btn.ContextFlyout().template try_as<MUX::Controls::CommandBarFlyout>())
+                                    {
+                                        if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                }
+                            }
+                            return false;
+                        };
+
+                        return checkCommands(menu.PrimaryCommands(), checkCommands) ||
+                               checkCommands(menu.SecondaryCommands(), checkCommands);
                     };
 
                     if (containsElement(focused))
@@ -5547,10 +5570,10 @@ namespace winrt::TerminalApp::implementation
                         return false;
                     }
 
-                    // Check if focused element is the internal MoreButton of this submenu
+                    // Check if focused element is the internal MoreButton of this submenu or a child flyout
                     if (const auto fe = focused.try_as<WUX::FrameworkElement>())
                     {
-                        if (fe.Name() == L"MoreButton")
+                        if (fe.Name() == MoreButtonPartName)
                         {
                             WUX::Controls::CommandBar focusedBar{ nullptr };
                             for (auto p = WUX::Media::VisualTreeHelper::GetParent(focusedDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
@@ -5583,13 +5606,42 @@ namespace winrt::TerminalApp::implementation
                                     return false;
                                 };
 
-                                if (menu.PrimaryCommands().Size() > 0 &&
-                                    checkCmdBar(menu.PrimaryCommands().GetAt(0).try_as<WUX::DependencyObject>()))
-                                {
-                                    return true;
-                                }
-                                if (menu.SecondaryCommands().Size() > 0 &&
-                                    checkCmdBar(menu.SecondaryCommands().GetAt(0).try_as<WUX::DependencyObject>()))
+                                const auto checkFlyoutCmdBar = [&](const auto& flyout, const auto& self) -> bool {
+                                    if (const auto cmdFlyout = flyout.template try_as<MUX::Controls::CommandBarFlyout>())
+                                    {
+                                        if (cmdFlyout.PrimaryCommands().Size() > 0 &&
+                                            checkCmdBar(cmdFlyout.PrimaryCommands().GetAt(0).try_as<WUX::DependencyObject>()))
+                                        {
+                                            return true;
+                                        }
+                                        if (cmdFlyout.SecondaryCommands().Size() > 0 &&
+                                            checkCmdBar(cmdFlyout.SecondaryCommands().GetAt(0).try_as<WUX::DependencyObject>()))
+                                        {
+                                            return true;
+                                        }
+                                        const auto checkFlyoutButtons = [&](const auto& commands) {
+                                            for (const auto& el : commands)
+                                            {
+                                                if (const auto btn = el.template try_as<AppBarButton>())
+                                                {
+                                                    if (self(btn.Flyout(), self) || self(btn.ContextFlyout(), self))
+                                                    {
+                                                        return true;
+                                                    }
+                                                }
+                                            }
+                                            return false;
+                                        };
+                                        if (checkFlyoutButtons(cmdFlyout.PrimaryCommands()) ||
+                                            checkFlyoutButtons(cmdFlyout.SecondaryCommands()))
+                                        {
+                                            return true;
+                                        }
+                                    }
+                                    return false;
+                                };
+
+                                if (checkFlyoutCmdBar(menu, checkFlyoutCmdBar))
                                 {
                                     return true;
                                 }
@@ -5597,7 +5649,7 @@ namespace winrt::TerminalApp::implementation
                         }
                     }
 
-                    // Check if focused element is a descendant of any command in this submenu
+                    // Check if focused element is a descendant of any command in this submenu (or child flyouts)
                     for (auto parent = WUX::Media::VisualTreeHelper::GetParent(focusedDo);
                          parent;
                          parent = WUX::Media::VisualTreeHelper::GetParent(parent))
@@ -5613,13 +5665,17 @@ namespace winrt::TerminalApp::implementation
 
                 if (isElementInMenu())
                 {
+                    bool focusedOwner = false;
                     if (WUX::Media::VisualTreeHelper::GetParent(owner))
                     {
-                        owner.Focus(FocusState::Keyboard);
+                        focusedOwner = owner.Focus(FocusState::Keyboard);
                     }
-                    else if (const auto control{ weakControl.get() })
+                    if (!focusedOwner)
                     {
-                        control.Focus(FocusState::Programmatic);
+                        if (const auto control{ weakControl.get() })
+                        {
+                            control.Focus(FocusState::Programmatic);
+                        }
                     }
                 }
             });

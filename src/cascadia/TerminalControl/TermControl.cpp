@@ -42,6 +42,7 @@ constexpr const auto TerminalWarningBellInterval = std::chrono::milliseconds(100
 
 constexpr std::wstring_view StateNormal{ L"Normal" };
 constexpr std::wstring_view StateCollapsed{ L"Collapsed" };
+constexpr std::wstring_view MoreButtonPartName{ L"MoreButton" };
 
 DEFINE_ENUM_FLAG_OPERATORS(winrt::Microsoft::Terminal::Control::CopyFormat);
 DEFINE_ENUM_FLAG_OPERATORS(winrt::Microsoft::Terminal::Control::MouseButtonState);
@@ -3966,16 +3967,16 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                         }
                         if (const auto btn = element.try_as<Controls::AppBarButton>())
                         {
-                            if (const auto cbf = btn.Flyout().try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                            if (const auto childFlyout = btn.Flyout().try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
                             {
-                                if (self(cbf.PrimaryCommands(), self) || self(cbf.SecondaryCommands(), self))
+                                if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
                                 {
                                     return true;
                                 }
                             }
-                            if (const auto cbf = btn.ContextFlyout().try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                            if (const auto childFlyout = btn.ContextFlyout().try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
                             {
-                                if (self(cbf.PrimaryCommands(), self) || self(cbf.SecondaryCommands(), self))
+                                if (self(childFlyout.PrimaryCommands(), self) || self(childFlyout.SecondaryCommands(), self))
                                 {
                                     return true;
                                 }
@@ -4003,7 +4004,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             // Check if focused element is the internal MoreButton ("...") of this flyout or a child flyout
             if (const auto fe = focused.try_as<FrameworkElement>())
             {
-                if (fe.Name() == L"MoreButton")
+                if (fe.Name() == MoreButtonPartName)
                 {
                     // Find the immediate containing CommandBar ancestor of the focused MoreButton.
                     // Restricting traversal to the CommandBar boundary prevents false-positive focus
@@ -4040,27 +4041,35 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                         };
 
                         const auto checkFlyoutCmdBar = [&](const auto& flyout, const auto& self) -> bool {
-                            if (const auto cbf = flyout.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
+                            if (const auto cmdFlyout = flyout.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
                             {
-                                if (cbf.PrimaryCommands().Size() > 0 &&
-                                    checkCmdBar(cbf.PrimaryCommands().GetAt(0).try_as<DependencyObject>()))
+                                if (cmdFlyout.PrimaryCommands().Size() > 0 &&
+                                    checkCmdBar(cmdFlyout.PrimaryCommands().GetAt(0).try_as<DependencyObject>()))
                                 {
                                     return true;
                                 }
-                                if (cbf.SecondaryCommands().Size() > 0 &&
-                                    checkCmdBar(cbf.SecondaryCommands().GetAt(0).try_as<DependencyObject>()))
+                                if (cmdFlyout.SecondaryCommands().Size() > 0 &&
+                                    checkCmdBar(cmdFlyout.SecondaryCommands().GetAt(0).try_as<DependencyObject>()))
                                 {
                                     return true;
                                 }
-                                for (const auto& el : cbf.SecondaryCommands())
-                                {
-                                    if (const auto btn = el.try_as<Controls::AppBarButton>())
+                                const auto checkFlyoutButtons = [&](const auto& commands) {
+                                    for (const auto& el : commands)
                                     {
-                                        if (self(btn.Flyout(), self) || self(btn.ContextFlyout(), self))
+                                        if (const auto btn = el.try_as<Controls::AppBarButton>())
                                         {
-                                            return true;
+                                            if (self(btn.Flyout(), self) || self(btn.ContextFlyout(), self))
+                                            {
+                                                return true;
+                                            }
                                         }
                                     }
+                                    return false;
+                                };
+                                if (checkFlyoutButtons(cmdFlyout.PrimaryCommands()) ||
+                                    checkFlyoutButtons(cmdFlyout.SecondaryCommands()))
+                                {
+                                    return true;
                                 }
                             }
                             return false;
