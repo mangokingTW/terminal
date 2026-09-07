@@ -440,6 +440,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 {
                     menu.SecondaryCommands().Append(e);
                 }
+                control->_takeFocusBackFromContextMenu();
             }
         });
         SelectionContextMenu().Closed([weakThis = get_weak()](auto&&, auto&&) {
@@ -456,6 +457,7 @@ namespace winrt::Microsoft::Terminal::Control::implementation
                 {
                     menu.SecondaryCommands().Append(e);
                 }
+                control->_takeFocusBackFromContextMenu();
             }
         });
         if constexpr (Feature_QuickFix::IsEnabled())
@@ -3929,6 +3931,22 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             cursorPos.X * fontSize.Width + static_cast<float>(padding.Left),
             cursorPos.Y * fontSize.Height + static_cast<float>(padding.Top),
         };
+    }
+
+    // Method Description:
+    // - GH#20593: when the context menu is dismissed with Esc, keyboard focus
+    //   stays on the AppBarButton that had it, even though the flyout is gone.
+    //   The button is off screen but alive, so Enter would invoke it. If the
+    //   flyout closed with focus still on one of its buttons, nothing else took
+    //   the focus (an invoked command that opens the search box or a new pane
+    //   moves it itself), so hand it back to the control.
+    void TermControl::_takeFocusBackFromContextMenu()
+    {
+        const auto focused = FocusManager::GetFocusedElement(XamlRoot());
+        if (focused && focused.try_as<Controls::AppBarButton>())
+        {
+            Focus(FocusState::Programmatic);
+        }
     }
 
     void TermControl::_contextMenuHandler(IInspectable /*sender*/,
