@@ -22,6 +22,31 @@ RECORDING_FPS = 10
 OUTPUT_DIR = Path("recording-artifacts")
 
 
+_caption: tuple[str, str] = ("", "")
+_active_recording: _Recording | None = None
+
+
+def _apply_caption() -> None:
+    if _active_recording is not None and _active_recording._recorder is not None:
+        _active_recording._recorder.caption = _caption[0]
+        _active_recording._recorder.caption_subtitle = _caption[1]
+
+
+def pytest_runtest_logstart(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    """Names the running test in the recording's bottom-left corner."""
+    global _caption
+    test_name = nodeid.split("::")[-1]
+    _caption = (test_name, "")
+    _apply_caption()
+
+
+def pytest_runtest_logfinish(nodeid: str, location: tuple[str, int | None, str]) -> None:
+    """Clears the caption between tests."""
+    global _caption
+    _caption = ("", "")
+    _apply_caption()
+
+
 class _Recording:
     """Starts on request; stops once, at the end of the session."""
 
@@ -52,6 +77,7 @@ class _Recording:
             return
         self._recorder = recorder
         self._output = output
+        _apply_caption()
         print(f"recording -> {output}")
 
     def stop(self) -> None:
@@ -69,6 +95,9 @@ class _Recording:
 
 @pytest.fixture(scope="session")
 def recording():
+    global _active_recording
     controller = _Recording()
+    _active_recording = controller
     yield controller
     controller.stop()
+    _active_recording = None
