@@ -5491,10 +5491,40 @@ namespace winrt::TerminalApp::implementation
             targetMenu.SecondaryCommands().Append(button);
         };
 
-        auto makeMenuItem = [](const winrt::hstring& label,
-                               const winrt::hstring& icon,
-                               const auto& subMenu,
-                               auto& targetMenu) {
+        // GH#20593: dismissing a nested flyout with Esc leaves keyboard focus on
+        // the button inside it that had it. That button is no longer on screen
+        // but still alive, so Enter invokes it. When a sub-flyout closes with
+        // focus still on one of its own buttons, hand it back to the button that
+        // opened it. (The top-level flyout does the same for the control itself
+        // in TermControl.)
+        auto handBackFocusOnClose = [](const MUX::Controls::CommandBarFlyout& subMenu, const AppBarButton& owner) {
+            subMenu.Closed([weakMenu = winrt::make_weak(subMenu), weakOwner = winrt::make_weak(owner)](auto&&, auto&&) {
+                const auto menu{ weakMenu.get() };
+                const auto owner{ weakOwner.get() };
+                if (!menu || !owner)
+                {
+                    return;
+                }
+                const auto focused{ Input::FocusManager::GetFocusedElement(owner.XamlRoot()).try_as<AppBarButton>() };
+                if (!focused)
+                {
+                    return;
+                }
+                for (const auto& command : menu.SecondaryCommands())
+                {
+                    if (command.try_as<AppBarButton>() == focused)
+                    {
+                        owner.Focus(FocusState::Programmatic);
+                        return;
+                    }
+                }
+            });
+        };
+
+        auto makeMenuItem = [&handBackFocusOnClose](const winrt::hstring& label,
+                                                    const winrt::hstring& icon,
+                                                    const auto& subMenu,
+                                                    auto& targetMenu) {
             AppBarButton button{};
 
             if (!icon.empty())
@@ -5506,15 +5536,16 @@ namespace winrt::TerminalApp::implementation
 
             button.Label(label);
             button.Flyout(subMenu);
+            handBackFocusOnClose(subMenu, button);
             targetMenu.SecondaryCommands().Append(button);
         };
 
-        auto makeContextItem = [&makeCallback](const winrt::hstring& label,
-                                               const winrt::hstring& icon,
-                                               const winrt::hstring& tooltip,
-                                               const auto& action,
-                                               const auto& subMenu,
-                                               auto& targetMenu) {
+        auto makeContextItem = [&makeCallback, &handBackFocusOnClose](const winrt::hstring& label,
+                                                                     const winrt::hstring& icon,
+                                                                     const winrt::hstring& tooltip,
+                                                                     const auto& action,
+                                                                     const auto& subMenu,
+                                                                     auto& targetMenu) {
             AppBarButton button{};
 
             if (!icon.empty())
@@ -5528,6 +5559,7 @@ namespace winrt::TerminalApp::implementation
             button.Click(makeCallback(action));
             WUX::Controls::ToolTipService::SetToolTip(button, box_value(tooltip));
             button.ContextFlyout(subMenu);
+            handBackFocusOnClose(subMenu, button);
             targetMenu.SecondaryCommands().Append(button);
         };
 
