@@ -148,13 +148,10 @@ inline bool IsElementInCommandBarFlyout(
 
     for (auto cur = focused; cur; cur = winrt::Windows::UI::Xaml::Media::VisualTreeHelper::GetParent(cur))
     {
-        if (!matchedCommand)
+        if (auto cmd = cur.try_as<winrt::Windows::UI::Xaml::Controls::ICommandBarElement>())
         {
-            if (auto cmd = cur.try_as<winrt::Windows::UI::Xaml::Controls::ICommandBarElement>())
-            {
-                matchedCommand = cmd;
-                break;
-            }
+            matchedCommand = cmd;
+            break;
         }
         if (const auto fe = cur.try_as<winrt::Windows::UI::Xaml::FrameworkElement>(); fe && fe.Name() == moreButtonPartName)
         {
@@ -220,6 +217,7 @@ inline bool IsElementInCommandBarFlyout(
                                     }
                                     if (p.try_as<winrt::Windows::UI::Xaml::Controls::Primitives::Popup>())
                                     {
+                                        checkedBarForThisList = true;
                                         break;
                                     }
                                 }

@@ -404,8 +404,8 @@ def test_the_tab_menu_hands_focus_back_on_esc(terminal):
 def test_portable_build_is_the_pinned_version():
     """The exe under test is the one the docstring talks about."""
     exe = _wt_exe()
-    if os.environ.get("WINTEGRATE_TERMINAL_EXE"):
-        pytest.skip("an explicit WINTEGRATE_TERMINAL_EXE is not version-pinned")
+    if os.environ.get("WINTEGRATE_TERMINAL_EXE") or os.environ.get("WT_PORTABLE_DIR"):
+        pytest.skip("an explicit WINTEGRATE_TERMINAL_EXE or WT_PORTABLE_DIR is not version-pinned")
     out = subprocess.run(
         [
             "powershell",
@@ -806,3 +806,167 @@ def test_cross_pane_more_button_click_does_not_steal_focus(terminal):
     )
 
 
+
+
+def test_shift_f10_opens_menu_and_esc_restores_focus(terminal):
+    """Accessibility edge case: context menu invoked via Shift+F10.
+
+    Shift+F10 is the universal Windows shortcut for context menus (WCAG standard).
+    Dismissing via Esc must restore focus to TermControl, and subsequent Enter
+    must reach the shell without triggering any hidden menu item.
+    """
+    send_keys("+{F10}")
+    focused = _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
+    assert focused.class_name == "AppBarButton", (
+        f"Shift+F10 did not open context menu; focus is on {focused.describe()}"
+    )
+    assert _popups(terminal), "Shift+F10 opened no popup window"
+    time.sleep(0.5)
+
+    # Dismiss with Esc
+    left = _dismiss_with_esc(terminal)
+    assert not left, "Esc did not close the menu after Shift+F10"
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)
+    assert _is_terminal(focused), (
+        f"after Esc, focus is on {focused.describe()}, not the terminal"
+    )
+
+    # Verify Enter reaches the shell
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    assert reopened == 0, f"Enter after Esc re-opened {reopened} popup(s)"
+
+
+def test_mouse_right_click_menu_and_esc_restores_focus(terminal):
+    """Mouse edge case: context menu opened via right-click, dismissed via Esc.
+
+    Right-clicking inside the active terminal pane opens the context menu.
+    When dismissed with Esc, keyboard focus must cleanly return to the terminal.
+    """
+    panes = _panes(terminal)
+    assert panes, "no panes found"
+    left, top, right, bottom = panes[0].bounding_rectangle
+    cx, cy = (left + right) // 2, (top + bottom) // 2
+    Mouse().right_click(cx, cy)
+    time.sleep(0.8)
+
+    assert _popups(terminal), "Right-click opened no popup window"
+
+    # Dismiss with Esc
+    left = _dismiss_with_esc(terminal)
+    assert not left, "Esc did not close the right-click menu"
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)
+    assert _is_terminal(focused), (
+        f"after Esc from right-click menu, focus is on {focused.describe()}, not the terminal"
+    )
+
+    # Verify Enter reaches the shell
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    assert reopened == 0, f"Enter after Esc re-opened {reopened} popup(s)"
+
+
+def test_secondary_commands_navigation_and_esc_restores_focus(terminal):
+    """Edge case: deep navigation in SecondaryCommands (overflow list) before Esc.
+
+    When navigating down into SecondaryCommands (e.g. Split pane, Close pane),
+    focus is on a secondary AppBarButton. Esc must restore focus to TermControl.
+    """
+    _open_pane_menu(terminal)
+    # Walk down 3-4 items into secondary commands
+    for _ in range(4):
+        send_keys("{DOWN}")
+        time.sleep(0.2)
+
+    focused_item = _focused()
+    assert focused_item.class_name == "AppBarButton", (
+        f"expected focus on AppBarButton in secondary commands, got {focused_item.describe()}"
+    )
+    time.sleep(0.5)
+
+    # Dismiss with Esc
+    left = _dismiss_with_esc(terminal)
+    assert not left, "Esc did not close the menu from secondary commands"
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)
+    assert _is_terminal(focused), (
+        f"after Esc from secondary command, focus is on {focused.describe()}, not the terminal"
+    )
+
+    # Verify Enter reaches shell
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    assert reopened == 0, f"Enter after Esc re-opened {reopened} popup(s)"
+
+
+def test_rapid_esc_enter_shell_input_not_swallowed(terminal):
+    """Concurrency / stress edge case: rapid Esc immediately followed by Enter.
+
+    Simulates a user quickly closing the context menu and pressing Enter.
+    Neither key should be lost, no popup should be invoked, and focus must be on terminal.
+    """
+    _open_pane_menu(terminal)
+    time.sleep(0.3)
+
+    # Rapid Esc followed by Enter
+    send_keys("{ESC}{ENTER}")
+    time.sleep(1.0)
+
+    no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=3.0)
+    assert no_popups == 0, "popup remained open after rapid Esc+Enter"
+
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    assert _is_terminal(focused), (
+        f"after rapid Esc+Enter, focus is on {focused.describe()}, not the terminal"
+    )
+
+def test_rapid_typing_immediately_after_esc(terminal):
+    """Concurrency edge case: rapid typing immediately after Esc.
+
+    Simulates a user dismissing the context menu and immediately typing
+    a shell command string. Every keystroke must route to TermControl without loss.
+    """
+    _open_pane_menu(terminal)
+    time.sleep(0.3)
+
+    # Dismiss with Esc and immediately type
+    send_keys("{ESC}echo FOOBAR_ALIVE{ENTER}")
+    time.sleep(1.2)
+
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    assert _is_terminal(focused), (
+        f"after rapid typing, focus is on {focused.describe()}, not the terminal"
+    )
+    assert not _popups(terminal), "popup remained open"
+
+
+def test_tab_key_cycling_and_esc_restores_focus(terminal):
+    """Navigation edge case: Tab cycling through all items before Esc.
+
+    Pressing Tab cycles focus between primary commands, MoreButton, and overflow.
+    Esc from any point in the cycle must restore focus to TermControl.
+    """
+    _open_pane_menu(terminal)
+    time.sleep(0.3)
+
+    # Tab 3 times through the menu
+    for _ in range(3):
+        send_keys("{TAB}")
+        time.sleep(0.2)
+
+    time.sleep(0.5)
+
+    # Dismiss with Esc
+    left = _dismiss_with_esc(terminal)
+    assert not left, "Esc did not close the menu after Tab cycling"
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)
+    assert _is_terminal(focused), (
+        f"after Tab cycling and Esc, focus is on {focused.describe()}, not the terminal"
+    )
+
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    assert reopened == 0, f"Enter after Esc re-opened {reopened} popup(s)"
