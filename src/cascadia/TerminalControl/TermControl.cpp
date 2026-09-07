@@ -3942,6 +3942,10 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     //   else took focus, so hand it back to the control. We verify membership against
     //   the closing menu specifically to avoid cross-pane focus stealing in
     //   multi-pane layouts.
+    // Arguments:
+    // - menu: the CommandBarFlyout that was closed.
+    // Return Value:
+    // - <none>
     void TermControl::_takeFocusBackFromContextMenu(const winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout& menu)
     {
         const auto root = XamlRoot();
