@@ -39,6 +39,7 @@ red run rather than another XFAIL that reads like the bug being there.
 from __future__ import annotations
 
 import ctypes
+import json
 import os
 import subprocess
 import sys
@@ -204,10 +205,54 @@ def _kill_launched() -> None:
     assert not left, f"Terminal windows we launched survived the sweep: {left}"
 
 
+def _ensure_terminal_settings(exe: Path) -> None:
+    """Configures rightClickContextMenu and Shift+F10 keybinding for tests."""
+    targets = []
+    # Portable mode settings folder beside exe
+    settings_dir = exe.parent / "settings"
+    settings_dir.mkdir(parents=True, exist_ok=True)
+    targets.append(settings_dir / "settings.json")
+
+    # LocalAppData unpackaged mode settings folder
+    local_app_data = os.environ.get("LOCALAPPDATA")
+    if local_app_data:
+        app_dir = Path(local_app_data) / "Microsoft" / "Windows Terminal"
+        app_dir.mkdir(parents=True, exist_ok=True)
+        targets.append(app_dir / "settings.json")
+
+    for s_file in targets:
+        try:
+            data = {}
+            if s_file.exists():
+                try:
+                    with open(s_file, "r", encoding="utf-8") as f:
+                        data = json.load(f)
+                except Exception:
+                    data = {}
+            profiles = data.setdefault("profiles", {})
+            defaults = profiles.setdefault("defaults", {})
+            defaults["rightClickContextMenu"] = True
+
+            actions = data.setdefault("actions", [])
+            has_shift_f10 = False
+            for a in actions:
+                if isinstance(a, dict) and a.get("command") == "showContextMenu" and "shift+f10" in str(a.get("keys", "")).lower():
+                    has_shift_f10 = True
+                    break
+            if not has_shift_f10:
+                actions.append({"command": "showContextMenu", "keys": "shift+f10"})
+
+            with open(s_file, "w", encoding="utf-8") as f:
+                json.dump(data, f, indent=4)
+        except Exception:
+            pass
+
+
 @pytest.fixture
 def terminal(recording):
     """A fresh Terminal window per test: every scenario here changes menu state."""
     exe = _wt_exe()
+    _ensure_terminal_settings(exe)
     _kill_launched()
     others = {w.hwnd for w in _terminal_windows()}
     proc, win = Window.launch_and_discover(
@@ -812,8 +857,8 @@ def test_shift_f10_opens_menu_and_esc_restores_focus(terminal):
     """Accessibility edge case: context menu invoked via Shift+F10.
 
     Shift+F10 is the universal Windows shortcut for context menus (WCAG standard).
-    Dismissing via Esc must restore focus to TermControl, and subsequent Enter
-    must reach the shell without triggering any hidden menu item.
+    With Shift+F10 mapped to showContextMenu in settings, dismissing via Esc must restore focus
+    to TermControl, and subsequent Enter must reach the shell without triggering any hidden menu item.
     """
     send_keys("+{F10}")
     focused = _focus_settles(lambda e: e.class_name == "AppBarButton", timeout=5.0)
@@ -841,7 +886,8 @@ def test_shift_f10_opens_menu_and_esc_restores_focus(terminal):
 def test_mouse_right_click_menu_and_esc_restores_focus(terminal):
     """Mouse edge case: context menu opened via right-click, dismissed via Esc.
 
-    Right-clicking inside the active terminal pane opens the context menu.
+    When rightClickContextMenu is enabled in settings (profiles.defaults.rightClickContextMenu: true),
+    right-clicking inside the active terminal pane opens the context menu instead of pasting.
     When dismissed with Esc, keyboard focus must cleanly return to the terminal.
     """
     panes = _panes(terminal)
