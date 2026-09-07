@@ -5510,26 +5510,52 @@ namespace winrt::TerminalApp::implementation
                 {
                     return;
                 }
-                const auto focused{ winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement(root) };
+                const auto focused{ WUX::Input::FocusManager::GetFocusedElement(root) };
                 if (!focused)
                 {
                     return;
                 }
-                for (const auto& command : menu.PrimaryCommands())
-                {
-                    if (command == focused)
+
+                const auto isElementInMenu = [&]() {
+                    for (const auto& command : menu.PrimaryCommands())
                     {
-                        owner.Focus(FocusState::Keyboard);
-                        return;
+                        if (command == focused) return true;
                     }
-                }
-                for (const auto& command : menu.SecondaryCommands())
-                {
-                    if (command == focused)
+                    for (const auto& command : menu.SecondaryCommands())
                     {
-                        owner.Focus(FocusState::Keyboard);
-                        return;
+                        if (command == focused) return true;
                     }
+
+                    // Check if focused element is the internal MoreButton ("...")
+                    if (const auto fe = focused.try_as<WUX::FrameworkElement>())
+                    {
+                        if (fe.Name() == L"MoreButton")
+                        {
+                            return true;
+                        }
+                    }
+
+                    // Check if focused element is a descendant of any command
+                    for (auto parent = WUX::Media::VisualTreeHelper::GetParent(focused.try_as<WUX::DependencyObject>());
+                         parent;
+                         parent = WUX::Media::VisualTreeHelper::GetParent(parent))
+                    {
+                        for (const auto& command : menu.PrimaryCommands())
+                        {
+                            if (command == parent) return true;
+                        }
+                        for (const auto& command : menu.SecondaryCommands())
+                        {
+                            if (command == parent) return true;
+                        }
+                    }
+
+                    return false;
+                };
+
+                if (isElementInMenu())
+                {
+                    owner.Focus(FocusState::Keyboard);
                 }
             });
         };

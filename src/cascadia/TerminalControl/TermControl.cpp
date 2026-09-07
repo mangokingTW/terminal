@@ -3955,23 +3955,51 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             return;
         }
 
-        const auto checkMembershipAndFocus = [&](const auto& commands) {
-            for (const auto& element : commands)
+        const auto isElementInMenu = [&]() {
+            for (const auto& element : menu.PrimaryCommands())
             {
-                if (element == focused)
+                if (element == focused) return true;
+            }
+            for (const auto& element : menu.SecondaryCommands())
+            {
+                if (element == focused) return true;
+            }
+
+            // Check if focused element is the internal MoreButton ("...")
+            if (const auto fe = focused.try_as<FrameworkElement>())
+            {
+                if (fe.Name() == L"MoreButton")
                 {
-                    // GH#10112: if the search box is open, do not steal focus from it.
-                    if (!SearchBoxEditInFocus())
-                    {
-                        Focus(FocusState::Programmatic);
-                    }
                     return true;
                 }
             }
+
+            // Check if focused element is a descendant of any command
+            for (auto parent = Media::VisualTreeHelper::GetParent(focused.try_as<DependencyObject>());
+                 parent;
+                 parent = Media::VisualTreeHelper::GetParent(parent))
+            {
+                for (const auto& element : menu.PrimaryCommands())
+                {
+                    if (element == parent) return true;
+                }
+                for (const auto& element : menu.SecondaryCommands())
+                {
+                    if (element == parent) return true;
+                }
+            }
+
             return false;
         };
 
-        checkMembershipAndFocus(menu.PrimaryCommands()) || checkMembershipAndFocus(menu.SecondaryCommands());
+        if (isElementInMenu())
+        {
+            // GH#10112: if the search box is active/open, do not steal focus from it.
+            if (!_searchBox || !_searchBox->IsOpen())
+            {
+                Focus(FocusState::Programmatic);
+            }
+        }
     }
 
     void TermControl::_contextMenuHandler(IInspectable /*sender*/,
