@@ -5505,7 +5505,12 @@ namespace winrt::TerminalApp::implementation
                 {
                     return;
                 }
-                const auto focused{ winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement(owner.XamlRoot()).try_as<AppBarButton>() };
+                const auto root{ owner.XamlRoot() };
+                if (!root)
+                {
+                    return;
+                }
+                const auto focused{ winrt::Windows::UI::Xaml::Input::FocusManager::GetFocusedElement(root).try_as<AppBarButton>() };
                 if (!focused)
                 {
                     return;

@@ -3936,13 +3936,21 @@ namespace winrt::Microsoft::Terminal::Control::implementation
     // Method Description:
     // - GH#20593: when the context menu is dismissed with Esc, keyboard focus
     //   stays on the AppBarButton that had it, even though the flyout is gone.
-    //   The button is off screen but alive, so Enter would invoke it. If the
-    //   flyout closed with focus still on one of its buttons, nothing else took
-    //   the focus (an invoked command that opens the search box or a new pane
-    //   moves it itself), so hand it back to the control.
+    //   The button is off screen but alive, so Enter would invoke it. Because
+    //   the Closed handler clears SecondaryCommands() before this call, a
+    //   strict membership test is no longer possible; testing for any
+    //   AppBarButton is deliberate and safe since no other AppBarButtons exist
+    //   in the terminal pane. If focus is still on an AppBarButton, nothing else
+    //   took it, so hand it back to the control.
     void TermControl::_takeFocusBackFromContextMenu()
     {
-        const auto focused = FocusManager::GetFocusedElement(XamlRoot());
+        const auto root = XamlRoot();
+        if (!root)
+        {
+            return;
+        }
+
+        const auto focused = FocusManager::GetFocusedElement(root);
         if (focused && focused.try_as<Controls::AppBarButton>())
         {
             Focus(FocusState::Programmatic);
