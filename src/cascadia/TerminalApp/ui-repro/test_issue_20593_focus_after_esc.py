@@ -493,11 +493,22 @@ def test_closing_pane_a_menu_does_not_steal_focus_from_pane_b(terminal):
     assert _popups(terminal), "pane A menu did not open"
     time.sleep(0.5)  # human cadence: pause with menu visible
 
-    # Click pane B: light-dismisses pane A's menu and gives focus to pane B
+    # Click pane B: light-dismisses pane A's menu
     _focus_pane(pane_b)
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
     assert no_popups == 0, "pane A's menu was not dismissed after clicking pane B"
     time.sleep(0.5)  # human cadence: let focus settle after dismiss
+
+    # Click pane B again to ensure pane B has focus now that menus are closed
+    _focus_pane(pane_b)
+    focused_b = _focus_settles(
+        lambda e: _is_terminal(e) and e.bounding_rectangle == pane_b.bounding_rectangle,
+        timeout=5.0,
+    )
+    assert focused_b.bounding_rectangle == pane_b.bounding_rectangle, (
+        f"pane B did not take focus: {focused_b.describe()}"
+    )
+    time.sleep(0.5)
 
     # Open pane B's menu now that pane B is focused
     send_keys("{APPS}")
@@ -624,8 +635,9 @@ def test_more_button_esc_returns_focus_to_terminal(terminal):
     more_btn = None
     for p in popups:
         p_elem = UiaElement.from_handle(p.hwnd)
-        more_btn = p_elem.find_first(automation_id="MoreButton")
-        if more_btn:
+        matches = p_elem.find_all(automation_id="MoreButton")
+        if matches:
+            more_btn = matches[0]
             break
 
     if not more_btn:
@@ -640,9 +652,10 @@ def test_more_button_esc_returns_focus_to_terminal(terminal):
                 break
 
     if more_btn:
-        more_btn.set_focus()
-        time.sleep(0.5)
-    else:
+        more_btn.set_focus(click=False)
+        time.sleep(0.3)
+
+    if _focused().automation_id != "MoreButton":
         # Fallback: navigate with right arrow to MoreButton
         send_keys("{RIGHT}")
         time.sleep(0.5)
@@ -680,12 +693,13 @@ def test_submenu_light_dismiss_detached_safe(terminal):
     assert len(_popups(terminal)) >= 2, "expected at least 2 popups for parent and submenu"
     time.sleep(0.5)
 
-    # Click the window title bar to light-dismiss all popups
-    rect = wintypes.RECT()
-    ctypes.windll.user32.GetWindowRect(terminal.hwnd, ctypes.byref(rect))
-    title_cx = (rect.left + rect.right) // 2
-    title_cy = rect.top + 10
-    Mouse().click(title_cx, title_cy)
+    # Click the terminal canvas outside the flyouts to light-dismiss all popups
+    panes = _panes(terminal)
+    assert panes, "no pane found"
+    pane = panes[0]
+    left, top, right, bottom = pane.bounding_rectangle
+    # Click near bottom-right of the terminal canvas, away from top-left flyouts
+    Mouse().click(right - 50, bottom - 50)
 
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
     assert no_popups == 0, f"light-dismiss left {no_popups} popup(s) open"
@@ -724,10 +738,19 @@ def test_cross_pane_more_button_click_does_not_steal_focus(terminal):
     assert _popups(terminal), "pane A menu did not open"
     time.sleep(0.5)
 
-    # Click Pane B to focus it and dismiss Pane A's menu
+    # Click Pane B to dismiss Pane A's menu
     _focus_pane(pane_b)
     no_popups = settled(lambda: len(_popups(terminal)), lambda n: n == 0, timeout=5.0)
     assert no_popups == 0, "pane A menu did not dismiss after focusing pane B"
+    time.sleep(0.5)
+
+    # Click Pane B again to give it focus now that Pane A's menu is dismissed
+    _focus_pane(pane_b)
+    focused_b = _focus_settles(
+        lambda e: _is_terminal(e) and e.bounding_rectangle == pane_b.bounding_rectangle,
+        timeout=5.0,
+    )
+    assert focused_b.bounding_rectangle == pane_b.bounding_rectangle, "pane B did not take focus"
 
     # Open Pane B menu
     send_keys("{APPS}")
@@ -740,14 +763,27 @@ def test_cross_pane_more_button_click_does_not_steal_focus(terminal):
     more_btn = None
     for p in b_popups:
         p_elem = UiaElement.from_handle(p.hwnd)
-        more_btn = p_elem.find_first(automation_id="MoreButton")
-        if more_btn:
+        matches = p_elem.find_all(automation_id="MoreButton")
+        if matches:
+            more_btn = matches[0]
             break
 
+    if not more_btn:
+        for p in b_popups:
+            p_elem = UiaElement.from_handle(p.hwnd)
+            btns = p_elem.find_all(class_name="Button")
+            for b in btns:
+                if b.automation_id == "MoreButton" or "more" in (b.name or "").lower():
+                    more_btn = b
+                    break
+            if more_btn:
+                break
+
     if more_btn:
-        more_btn.set_focus()
-        time.sleep(0.5)
-    else:
+        more_btn.set_focus(click=False)
+        time.sleep(0.3)
+
+    if _focused().automation_id != "MoreButton":
         send_keys("{RIGHT}")
         time.sleep(0.5)
 
