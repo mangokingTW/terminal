@@ -101,14 +101,17 @@ def settled(read: Callable[[], Any], matches: Callable[[Any], bool], timeout: fl
 
 
 def _wt_exe() -> Path:
+    """The launcher: wt.exe where the distribution ships one, else WindowsTerminal.exe
+    itself, which takes the same command line (a Dev build's zip carries no wt.exe)."""
     override = os.environ.get("WINTEGRATE_TERMINAL_EXE")
-    exe = Path(override) if override else PORTABLE_DIR / "wt.exe"
-    if not exe.exists():
-        pytest.fail(
-            f"Windows Terminal is not at {exe}. The workflow extracts the portable zip to "
-            f"WT_PORTABLE_DIR; locally, set WINTEGRATE_TERMINAL_EXE to a wt.exe."
-        )
-    return exe
+    candidates = [Path(override)] if override else [PORTABLE_DIR / "wt.exe", PORTABLE_DIR / PROCESS]
+    for exe in candidates:
+        if exe.exists():
+            return exe
+    pytest.fail(
+        f"Windows Terminal is not at any of {[str(c) for c in candidates]}. The workflow "
+        "extracts the portable zip to WT_PORTABLE_DIR; locally, set WINTEGRATE_TERMINAL_EXE."
+    )
 
 
 def _image_path(pid: int) -> str:
@@ -134,6 +137,8 @@ def _is_terminal(element: UiaElement) -> bool:
 
 
 def _panes(win: Window) -> list[UiaElement]:
+    """Only meaningful while no flyout is open: with a popup up, the window's UIA
+    tree reports no TermControl at all."""
     return UiaElement.from_handle(win.hwnd).find_all(class_name="TermControl")
 
 
@@ -153,17 +158,32 @@ def _focus_settles(matches, timeout: float = 3.0) -> UiaElement:
     return settled(_focused, matches, timeout=timeout)
 
 
-def _walk_down_to(name_part: str, steps: int = 14) -> UiaElement:
-    """Down-arrows through the open menu until an item whose name contains `name_part`
-    has focus. Returns the focused element either way; the caller asserts."""
+def _walk_down_until(matches, steps: int = 14) -> UiaElement:
+    """Down-arrows through the open menu until the focused item satisfies `matches`.
+    Returns the focused element either way; the caller asserts."""
     focused = _focused()
     for _ in range(steps):
-        if name_part.casefold() in focused.name.casefold():
+        if matches(focused):
             return focused
         before = focused.name
         send_keys("{DOWN}")
         focused = _focus_settles(lambda e, b=before: e.name != b, timeout=2.0)
     return focused
+
+
+# Menu items are found by what they can do, not by what they say: the same
+# build shows "Split pane" on an en-US runner and "拆分窗格" on a zh system, and
+# the only top-level pane-menu button that expands is the Split pane one.
+def _expands(element: UiaElement) -> bool:
+    return "ExpandCollapse" in element.supported_patterns()
+
+
+def _is_split_pane_entry(element: UiaElement) -> bool:
+    return element.class_name == "AppBarButton" and _expands(element)
+
+
+def _is_tab_submenu_entry(element: UiaElement) -> bool:
+    return element.class_name == "MenuFlyoutSubItem"
 
 
 # Only processes this module launched are ever killed. On windows-latest the
@@ -227,20 +247,33 @@ def _open_pane_menu(win: Window) -> UiaElement:
 
 
 def _open_split_submenu(win: Window) -> UiaElement:
+    """Opens the Split pane submenu; returns its first item (Duplicate <profile>)."""
     _open_pane_menu(win)
-    entry = _walk_down_to("Split pane")
-    assert "split pane" in entry.name.casefold(), f"never reached Split pane: {entry.describe()}"
+    entry = _walk_down_until(_is_split_pane_entry)
+    assert _is_split_pane_entry(entry), f"never reached the Split pane entry: {entry.describe()}"
     send_keys("{RIGHT}")
-    item = _focus_settles(lambda e: "duplicate" in e.name.casefold(), timeout=3.0)
-    assert "duplicate" in item.name.casefold(), (
+    item = _focus_settles(
+        lambda e, n=entry.name: e.class_name == "AppBarButton" and e.name != n, timeout=3.0
+    )
+    assert item.class_name == "AppBarButton" and item.name != entry.name, (
         f"Right did not open the Split pane submenu; focus is on {item.describe()}"
     )
     return item
 
 
-def _press_esc_and_wait_for_the_flyout(win: Window, opened: int) -> None:
+def _press_esc_and_wait_for_the_flyout(win: Window, opened: int) -> int:
     send_keys("{ESC}")
-    settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=3.0)
+    return settled(lambda: len(_popups(win)), lambda n: n < opened, timeout=3.0)
+
+
+def _dismiss_with_esc(win: Window, presses: int = 3) -> int:
+    """Esc until no popup is left, at most `presses` times; returns what is left."""
+    left = len(_popups(win))
+    for _ in range(presses):
+        if not left:
+            break
+        left = _press_esc_and_wait_for_the_flyout(win, left)
+    return left
 
 
 def test_the_measurement_can_see_a_split(terminal):
@@ -257,31 +290,48 @@ def test_the_measurement_can_see_a_split(terminal):
 
 @reproduces(FocusStayedOnDismissedItem)
 def test_esc_from_the_submenu_hands_focus_back_to_the_terminal(terminal):
+    """One Esc closes the submenu and must leave focus on something that is still
+    on screen (the Split pane entry, as a MenuFlyout would); a second Esc closes
+    the menu and focus must be back on the terminal."""
     item = _open_split_submenu(terminal)
     opened = len(_popups(terminal))
     _press_esc_and_wait_for_the_flyout(terminal, opened)
-    focused = _focus_settles(_is_terminal, timeout=3.0)
-    if not _is_terminal(focused):
+    focused = _focus_settles(lambda e: e.name != item.name, timeout=3.0)
+    if focused.name == item.name or not focused.is_visible():
         raise FocusStayedOnDismissedItem(
             f"after Esc, focus is on {focused.describe()} rect={focused.bounding_rectangle} "
-            f"(the item that had it was {item.name!r}), not on the terminal"
+            f"(the item that had it was {item.name!r}); nothing on screen has it"
+        )
+    left = _dismiss_with_esc(terminal)
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    if left or not _is_terminal(focused):
+        raise FocusStayedOnDismissedItem(
+            f"after closing the menu with Esc, {left} popup(s) remain and focus is on "
+            f"{focused.describe()}, not on the terminal"
         )
 
 
-@reproduces(DismissedItemWasInvoked)
+@reproduces((FocusStayedOnDismissedItem, DismissedItemWasInvoked))
 def test_enter_after_esc_reaches_the_shell_not_the_dismissed_item(terminal):
+    """Esc until the menu is gone, then Enter: it must reach the shell. On the
+    build with the bug, Esc after the submenu cannot close the menu at all (the
+    key goes to the hidden button), and Enter splits the pane."""
     _open_split_submenu(terminal)
-    opened = len(_popups(terminal))
-    _press_esc_and_wait_for_the_flyout(terminal, opened)
+    left = _dismiss_with_esc(terminal)
+    if left:
+        raise FocusStayedOnDismissedItem(
+            f"{left} popup(s) still open after three Esc presses: the keys went to the "
+            "dismissed submenu item"
+        )
     send_keys("{ENTER}")
     # Waits for a split to finish rather than for the count to move: the tree reads
     # 0 panes for a moment while a new one is being built.
     panes = settled(lambda: len(_panes(terminal)), lambda n: n == 2, timeout=5.0)
     time.sleep(1.0)  # hold the result for the recording
-    if panes != 1:
+    if panes != 1 or _popups(terminal):
         raise DismissedItemWasInvoked(
-            f"Enter after Esc left {panes} panes: the dismissed 'Duplicate ...' item was "
-            "still the keyboard focus and got invoked"
+            f"Enter after Esc left {panes} panes and {len(_popups(terminal))} popup(s): the "
+            "dismissed item was still the keyboard focus and got invoked"
         )
 
 
@@ -291,8 +341,8 @@ def test_esc_from_the_top_level_hands_focus_back_to_the_terminal(terminal):
     focus stays on the 'Split pane' button, and Enter re-opens its submenu anchored
     to a button that is no longer on screen."""
     _open_pane_menu(terminal)
-    entry = _walk_down_to("Split pane")
-    assert "split pane" in entry.name.casefold(), f"never reached Split pane: {entry.describe()}"
+    entry = _walk_down_until(_is_split_pane_entry)
+    assert _is_split_pane_entry(entry), f"never reached the Split pane entry: {entry.describe()}"
     opened = len(_popups(terminal))
     _press_esc_and_wait_for_the_flyout(terminal, opened)
     assert not _popups(terminal), "Esc at the top level did not close the menu"
@@ -309,7 +359,8 @@ def test_esc_from_the_top_level_hands_focus_back_to_the_terminal(terminal):
 
 def test_the_tab_menu_hands_focus_back_on_esc(terminal):
     """The control: the tab header's MenuFlyout returns focus on Esc (#5750), so
-    Enter afterwards goes to the shell and nothing splits."""
+    Enter afterwards goes to the shell and nothing splits. Its first submenu
+    (Move tab) stands in for the pane menu's Split pane."""
     tabs = UiaElement.from_handle(terminal.hwnd).find_all(control_type_id=UIA_TAB_ITEM)
     assert tabs, "no tab item in the window"
     left, top, right, bottom = tabs[0].bounding_rectangle
@@ -318,10 +369,10 @@ def test_the_tab_menu_hands_focus_back_on_esc(terminal):
     assert focused.class_name.startswith("MenuFlyout"), (
         f"the tab context menu did not take focus; focus is on {focused.describe()}"
     )
-    entry = _walk_down_to("Close")
-    assert entry.name.casefold() == "close", f"never reached the Close submenu: {entry.describe()}"
+    entry = _walk_down_until(_is_tab_submenu_entry)
+    assert _is_tab_submenu_entry(entry), f"never reached a tab submenu entry: {entry.describe()}"
     send_keys("{RIGHT}")
-    _focus_settles(lambda e: e.name.casefold() != "close", timeout=2.0)
+    _focus_settles(lambda e, n=entry.name: e.name != n, timeout=2.0)
     for _ in range(2):  # one Esc per open level: the submenu, then the menu
         opened = len(_popups(terminal))
         _press_esc_and_wait_for_the_flyout(terminal, opened)
