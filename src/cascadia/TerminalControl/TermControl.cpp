@@ -3,6 +3,7 @@
 
 #include "pch.h"
 #include "TermControl.h"
+#include <Utils.h>
 
 #include <inputpaneinterop.h>
 
@@ -42,7 +43,6 @@ constexpr const auto TerminalWarningBellInterval = std::chrono::milliseconds(100
 
 constexpr std::wstring_view StateNormal{ L"Normal" };
 constexpr std::wstring_view StateCollapsed{ L"Collapsed" };
-constexpr std::wstring_view MoreButtonPartName{ L"MoreButton" };
 
 DEFINE_ENUM_FLAG_OPERATORS(winrt::Microsoft::Terminal::Control::CopyFormat);
 DEFINE_ENUM_FLAG_OPERATORS(winrt::Microsoft::Terminal::Control::MouseButtonState);
@@ -3965,125 +3965,20 @@ namespace winrt::Microsoft::Terminal::Control::implementation
             return;
         }
 
-        const auto isElementInMenu = [&]() {
-            const auto focusedDo = focused.try_as<DependencyObject>();
-            if (!focusedDo)
-            {
-                return false;
-            }
-
-            // Check if focused element or any visual ancestor is a command bar element.
-            // Bounded to CommandBar or Popup to avoid walking up the entire visual tree on external focus.
-            Controls::ICommandBarElement matchedCommand{ nullptr };
-            for (auto cur = focusedDo; cur; cur = Media::VisualTreeHelper::GetParent(cur))
-            {
-                if (auto cmd = cur.try_as<Controls::ICommandBarElement>())
-                {
-                    matchedCommand = cmd;
-                    break;
-                }
-                if (cur.try_as<Controls::CommandBar>() || cur.try_as<Controls::Primitives::Popup>())
-                {
-                    break;
-                }
-            }
-
-            // Check if focused element is the internal MoreButton ("...") of a command bar.
-            Controls::CommandBar focusedBar{ nullptr };
-            if (const auto fe = focused.try_as<FrameworkElement>())
-            {
-                if (fe.Name() == MoreButtonPartName)
-                {
-                    for (auto p = Media::VisualTreeHelper::GetParent(focusedDo); p; p = Media::VisualTreeHelper::GetParent(p))
-                    {
-                        if (auto cb = p.try_as<Controls::CommandBar>())
-                        {
-                            focusedBar = cb;
-                            break;
-                        }
-                        if (p.try_as<Controls::Primitives::Popup>())
-                        {
-                            break;
-                        }
-                    }
-                }
-            }
-
-            if (!matchedCommand && !focusedBar)
-            {
-                return false;
-            }
-
-            // Verify whether matchedCommand or focusedBar belongs to this flyout (or a child flyout).
-            const auto checkMenu = [&](const auto& currentMenu, const size_t depth, const auto& self) -> bool {
-                if (depth > 8)
-                {
-                    return false;
-                }
-                for (const auto& commands : { currentMenu.PrimaryCommands(), currentMenu.SecondaryCommands() })
-                {
-                    if (commands)
-                    {
-                        bool checkedBarForThisList = false;
-                        for (const auto& element : commands)
-                        {
-                            if (matchedCommand && element == matchedCommand)
-                            {
-                                return true;
-                            }
-                            if (focusedBar && !checkedBarForThisList)
-                            {
-                                if (const auto cmdDo = element.try_as<DependencyObject>())
-                                {
-                                    for (auto p = Media::VisualTreeHelper::GetParent(cmdDo); p; p = Media::VisualTreeHelper::GetParent(p))
-                                    {
-                                        if (p == focusedBar)
-                                        {
-                                            return true;
-                                        }
-                                        if (p.try_as<Controls::CommandBar>())
-                                        {
-                                            // Sibling items share the same CommandBar ancestor;
-                                            // no need to re-climb from other items in this list.
-                                            checkedBarForThisList = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if (const auto btn = element.try_as<Controls::AppBarButton>())
-                            {
-                                for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
-                                {
-                                    if (const auto childFlyout = child.try_as<winrt::Microsoft::UI::Xaml::Controls::CommandBarFlyout>())
-                                    {
-                                        if (self(childFlyout, depth + 1, self))
-                                        {
-                                            return true;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                return false;
-            };
-
-            return checkMenu(menu, 0, checkMenu);
-        };
-
-        if (isElementInMenu())
+        if (const auto focusedDo = focused.try_as<DependencyObject>())
         {
-            // GH#10112: if the search box is active/open, return focus to it;
-            // otherwise restore focus to the terminal control.
-            if (_searchBox && _searchBox->IsOpen())
+            if (IsElementInCommandBarFlyout(focusedDo, menu))
             {
-                _searchBox->SetFocusOnTextbox();
-            }
-            else
-            {
-                Focus(FocusState::Programmatic);
+                // GH#10112: if the search box is active/open, return focus to it;
+                // otherwise restore focus to the terminal control.
+                if (_searchBox && _searchBox->IsOpen())
+                {
+                    _searchBox->SetFocusOnTextbox();
+                }
+                else
+                {
+                    Focus(FocusState::Programmatic);
+                }
             }
         }
     }

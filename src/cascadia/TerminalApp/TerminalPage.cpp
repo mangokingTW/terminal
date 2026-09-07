@@ -5520,131 +5520,24 @@ namespace winrt::TerminalApp::implementation
                     return;
                 }
                 const auto focused{ WUX::Input::FocusManager::GetFocusedElement(root) };
-                if (!focused)
+                if (const auto focusedDo = focused.try_as<WUX::DependencyObject>())
                 {
-                    return;
-                }
-
-                const auto isElementInMenu = [&]() {
-                    const auto focusedDo = focused.try_as<WUX::DependencyObject>();
-                    if (!focusedDo)
+                    if (IsElementInCommandBarFlyout(focusedDo, menu))
                     {
-                        return false;
-                    }
-
-                    // Check if focused element or any visual ancestor is a command bar element.
-                    // Bounded to CommandBar or Popup to avoid walking up the entire visual tree on external focus.
-                    WUX::Controls::ICommandBarElement matchedCommand{ nullptr };
-                    for (auto cur = focusedDo; cur; cur = WUX::Media::VisualTreeHelper::GetParent(cur))
-                    {
-                        if (auto cmd = cur.try_as<WUX::Controls::ICommandBarElement>())
+                        if (WUX::Media::VisualTreeHelper::GetParent(owner))
                         {
-                            matchedCommand = cmd;
-                            break;
-                        }
-                        if (cur.try_as<WUX::Controls::CommandBar>() || cur.try_as<WUX::Controls::Primitives::Popup>())
-                        {
-                            break;
-                        }
-                    }
-
-                    // Check if focused element is the internal MoreButton ("...") of a command bar.
-                    WUX::Controls::CommandBar focusedBar{ nullptr };
-                    if (const auto fe = focused.try_as<WUX::FrameworkElement>())
-                    {
-                        if (fe.Name() == MoreButtonPartName)
-                        {
-                            for (auto p = WUX::Media::VisualTreeHelper::GetParent(focusedDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
+                            if (!owner.Focus(FocusState::Keyboard) && !owner.Focus(FocusState::Programmatic))
                             {
-                                if (auto cb = p.try_as<WUX::Controls::CommandBar>())
+                                if (const auto control{ weakControl.get() })
                                 {
-                                    focusedBar = cb;
-                                    break;
-                                }
-                                if (p.try_as<WUX::Controls::Primitives::Popup>())
-                                {
-                                    break;
+                                    control.Focus(FocusState::Programmatic);
                                 }
                             }
                         }
+                        // If owner is detached (e.g. during light-dismiss of the entire flyout hierarchy),
+                        // do not force focus to the terminal here: the top-level menu's Closed handler in
+                        // TermControl will handle focus restoration and respect open UI states like the Find search box.
                     }
-
-                    if (!matchedCommand && !focusedBar)
-                    {
-                        return false;
-                    }
-
-                    // Verify whether matchedCommand or focusedBar belongs to this flyout (or a child flyout).
-                    const auto checkMenu = [&](const auto& currentMenu, const size_t depth, const auto& self) -> bool {
-                        if (depth > 8)
-                        {
-                            return false;
-                        }
-                        for (const auto& commands : { currentMenu.PrimaryCommands(), currentMenu.SecondaryCommands() })
-                        {
-                            if (commands)
-                            {
-                                bool checkedBarForThisList = false;
-                                for (const auto& element : commands)
-                                {
-                                    if (matchedCommand && element == matchedCommand)
-                                    {
-                                        return true;
-                                    }
-                                    if (focusedBar && !checkedBarForThisList)
-                                    {
-                                        if (const auto cmdDo = element.try_as<WUX::DependencyObject>())
-                                        {
-                                            for (auto p = WUX::Media::VisualTreeHelper::GetParent(cmdDo); p; p = WUX::Media::VisualTreeHelper::GetParent(p))
-                                            {
-                                                if (p == focusedBar)
-                                                {
-                                                    return true;
-                                                }
-                                                if (p.try_as<WUX::Controls::CommandBar>())
-                                                {
-                                                    // Sibling items share the same CommandBar ancestor;
-                                                    // no need to re-climb from other items in this list.
-                                                    checkedBarForThisList = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (const auto btn = element.try_as<AppBarButton>())
-                                    {
-                                        for (const auto& child : { btn.Flyout(), btn.ContextFlyout() })
-                                        {
-                                            if (const auto childFlyout = child.try_as<MUX::Controls::CommandBarFlyout>())
-                                            {
-                                                if (self(childFlyout, depth + 1, self))
-                                                {
-                                                    return true;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                        return false;
-                    };
-
-                    return checkMenu(menu, 0, checkMenu);
-                };
-
-                if (isElementInMenu())
-                {
-                    if (WUX::Media::VisualTreeHelper::GetParent(owner))
-                    {
-                        if (!owner.Focus(FocusState::Keyboard))
-                        {
-                            owner.Focus(FocusState::Programmatic);
-                        }
-                    }
-                    // If owner is detached (e.g. during light-dismiss of the entire flyout hierarchy),
-                    // do not force focus to the terminal here: the top-level menu's Closed handler in
-                    // TermControl will handle focus restoration and respect open UI states like the Find search box.
                 }
             });
         };
