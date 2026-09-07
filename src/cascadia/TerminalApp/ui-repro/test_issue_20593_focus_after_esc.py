@@ -560,3 +560,62 @@ def test_invoking_menu_command_returns_focus_to_terminal(terminal):
     assert _is_terminal(focused), (
         f"after invoking command from menu, focus is on {focused.describe()}, not the terminal"
     )
+
+
+def test_more_button_esc_returns_focus_to_terminal(terminal):
+    """Edge case: focus on CommandBarFlyout's internal MoreButton ('...').
+
+    When keyboard navigation lands on the flyout's internal 'MoreButton' (the overflow
+    toggle button) and the user presses Esc, the flyout closes.
+    Because MoreButton is an internal template child and not in PrimaryCommands or
+    SecondaryCommands, the ancestry and name check in _takeFocusBackFromContextMenu
+    must recognize it and restore focus to the terminal.
+    """
+    _open_pane_menu(terminal)
+
+    # Locate MoreButton or navigate to it
+    popups = _popups(terminal)
+    assert popups, "menu popup not found"
+
+    more_btn = None
+    for p in popups:
+        more_btn = p.find_first(automation_id="MoreButton")
+        if more_btn:
+            break
+
+    if not more_btn:
+        for p in popups:
+            btns = p.find_all(class_name="Button")
+            for b in btns:
+                if b.automation_id == "MoreButton" or "more" in (b.name or "").lower():
+                    more_btn = b
+                    break
+            if more_btn:
+                break
+
+    if more_btn:
+        more_btn.set_focus()
+        time.sleep(0.5)
+    else:
+        # Fallback: navigate with right arrow to MoreButton
+        send_keys("{RIGHT}")
+        time.sleep(0.5)
+
+    time.sleep(0.5)  # human cadence: show MoreButton focused
+
+    # Dismiss menu with Esc
+    opened = len(_popups(terminal))
+    left = _press_esc_and_wait_for_the_flyout(terminal, opened)
+    assert not left, "Esc did not close the menu when focus was on MoreButton"
+
+    focused = _focus_settles(_is_terminal, timeout=3.0)
+    time.sleep(1.0)  # human cadence: hold result
+    assert _is_terminal(focused), (
+        f"after Esc from MoreButton, focus is on {focused.describe()}, not the terminal"
+    )
+
+    # Verify Enter goes to shell and does not re-open any dismissed popup
+    send_keys("{ENTER}")
+    reopened = settled(lambda: len(_popups(terminal)), lambda n: n > 0, timeout=1.0)
+    assert reopened == 0, f"Enter after Esc re-opened {reopened} popup(s)"
+
